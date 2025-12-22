@@ -28,9 +28,14 @@ DEFAULT_KEY = DEFAULT_KEY or os.getenv("OPENAI_API_KEY", "")
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.header("⚙️ Configurazione")
-    # In produzione nascondi questo campo o usa st.secrets
-    api_key = st.text_input("OpenAI API Key", value=DEFAULT_KEY, type="password") 
+    # LOGICA INVISIBILE:
+    # Se la chiave è nei secrets (DEFAULT_KEY), usiamo quella e non mostriamo nulla.
+    # Se non c'è (es. stai testando in locale senza secrets), mostriamo la casella.
+    if DEFAULT_KEY:
+        api_key = DEFAULT_KEY
+    else:
+        st.header("⚙️ Configurazione")
+        api_key = st.text_input("OpenAI API Key", type="password")
     
     st.divider()
     st.markdown("### 📞 I tuoi Dati")
@@ -213,4 +218,5 @@ if st.button("🚀 Analizza Fattibilità"):
                 else:
                     st.error("Errore lettura AI. Riprova.")
             else:
+
                 st.error("File illeggibile.")
