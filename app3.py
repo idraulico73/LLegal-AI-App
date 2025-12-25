@@ -1,6 +1,5 @@
 import streamlit as st
 from datetime import datetime
-import time
 from io import BytesIO
 import base64
 
@@ -14,119 +13,65 @@ from fpdf import FPDF
 st.set_page_config(page_title="Ingegneria Forense & Strategy AI", layout="wide")
 
 # Recupera la chiave API dai secrets
-# Assicurati di avere in .streamlit/secrets.toml:
-# OPENAI_API_KEY = "sk-..."
-# ADMIN_PASSWORD = "tua_password"
 try:
     openai.api_key = st.secrets["OPENAI_API_KEY"]
     client = openai.OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 except:
-    st.warning("⚠️ Chiave API OpenAI non trovata nei Secrets. L'app non potrà generare testi reali.")
+    st.warning("⚠️ Chiave API OpenAI non trovata. Le funzioni AI non andranno.")
     client = None
 
-# --- FUNZIONI DI UTILITÀ: LETTURA E GENERAZIONE ---
+# --- FUNZIONI DI UTILITÀ ---
 
 def prepara_input_multimodale(uploaded_files):
-    """
-    Prepara il payload misto (Testo + Immagini) per GPT-4o Vision.
-    Legge PDF (come testo) e Immagini (come base64).
-    """
+    """Prepara il payload misto (Testo + Immagini)"""
     contenuto_messaggio = []
-    
-    # Testo introduttivo per l'AI
-    contenuto_messaggio.append({
-        "type": "text", 
-        "text": "Ecco i documenti del fascicolo (testi estratti e scansioni). Analizzali con attenzione tecnica:"
-    })
+    contenuto_messaggio.append({"type": "text", "text": "Analizza i seguenti documenti (testi e immagini):"})
 
     for file in uploaded_files:
         try:
-            # CASO A: Immagini (JPG, PNG) -> Usa GPT Vision
             if file.type in ["image/jpeg", "image/png", "image/jpg"]:
-                # Reset pointer e lettura
                 file.seek(0)
                 base64_image = base64.b64encode(file.read()).decode('utf-8')
                 contenuto_messaggio.append({
                     "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{file.type};base64,{base64_image}",
-                        "detail": "high" # 'low' costa meno, 'high' legge meglio le scritte piccole
-                    }
+                    "image_url": {"url": f"data:{file.type};base64,{base64_image}", "detail": "high"}
                 })
-            
-            # CASO B: PDF -> Estrai testo
             elif file.type == "application/pdf":
                 pdf_reader = PdfReader(file)
-                text_buffer = f"\n--- INIZIO FILE PDF: {file.name} ---\n"
+                text_buffer = f"\n--- PDF: {file.name} ---\n"
                 for page in pdf_reader.pages:
                     estratto = page.extract_text()
-                    if estratto:
-                        text_buffer += estratto + "\n"
-                
-                # Aggiungiamo il testo del PDF
-                contenuto_messaggio.append({
-                    "type": "text", 
-                    "text": text_buffer
-                })
-                
-            # CASO C: TXT
+                    if estratto: text_buffer += estratto + "\n"
+                contenuto_messaggio.append({"type": "text", "text": text_buffer})
             elif file.type == "text/plain":
                 text_content = str(file.read(), "utf-8")
-                contenuto_messaggio.append({
-                    "type": "text", 
-                    "text": f"\n--- FILE TXT: {file.name} ---\n{text_content}"
-                })
-                
+                contenuto_messaggio.append({"type": "text", "text": f"\n--- TXT: {file.name} ---\n{text_content}"})
         except Exception as e:
-            st.error(f"Errore lettura file {file.name}: {e}")
-            
+            st.error(f"Errore file {file.name}: {e}")
     return contenuto_messaggio
 
-def interroga_llm_multimodale(prompt_sistema, contesto_chat, payload_files):
-    """
-    Chiamata a GPT-4o.
-    Combina: Payload File + Prompt Sistema + Chat History
-    """
-    if not client:
-        return "ERRORE: API Key mancante."
-
-    # Clona il payload per non modificare l'originale
+def interroga_llm_multimodale(prompt_sistema, contesto_chat, payload_files, modello_scelto):
+    """Chiamata a OpenAI con modello dinamico"""
+    if not client: return "ERRORE: API Key mancante."
+    
     messaggio_utente = list(payload_files)
-
-    # Aggiungi le istruzioni specifiche in fondo
-    istruzioni_finali = f"""
-    \n\n--- ISTRUZIONI PER L'AI ---
-    RUOLO: {prompt_sistema}
-    
-    CONTESTO STRATEGICO (DALLA CHAT CON L'UTENTE):
-    {contesto_chat}
-    
-    COMPITO: Genera il documento richiesto basandoti SUI FILE forniti e sulla STRATEGIA definita in chat.
-    """
-    
-    messaggio_utente.append({
-        "type": "text",
-        "text": istruzioni_finali
-    })
+    istruzioni = f"\n\nRUOLO: {prompt_sistema}\nCONTESTO CHAT: {contesto_chat}\nGenera il documento richiesto."
+    messaggio_utente.append({"type": "text", "text": istruzioni})
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o", # Fondamentale per vedere le immagini
-            messages=[
-                {"role": "user", "content": messaggio_utente}
-            ],
-            temperature=0.4, # Abbastanza preciso
+            model=modello_scelto, # Qui usiamo il modello passato come parametro
+            messages=[{"role": "user", "content": messaggio_utente}],
+            temperature=0.4, 
             max_tokens=4000
         )
         return response.choices[0].message.content
-    except Exception as e:
-        return f"Errore durante la generazione AI: {e}"
+    except Exception as e: return f"Errore AI ({modello_scelto}): {e}"
 
 def crea_word(testo, titolo):
-    """Genera file .docx"""
     doc = Document()
     doc.add_heading(titolo, 0)
-    doc.add_paragraph(f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    doc.add_paragraph(f"Data: {datetime.now().strftime('%d/%m/%Y')}")
     doc.add_paragraph(testo)
     buffer = BytesIO()
     doc.save(buffer)
@@ -134,13 +79,11 @@ def crea_word(testo, titolo):
     return buffer
 
 def crea_pdf(testo, titolo):
-    """Genera file .pdf"""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
     pdf.cell(200, 10, txt=titolo, ln=1, align='C')
     pdf.ln(10)
-    # Gestione encoding basic
     testo_safe = testo.encode('latin-1', 'replace').decode('latin-1')
     pdf.multi_cell(0, 10, txt=testo_safe)
     buffer = BytesIO()
@@ -149,176 +92,192 @@ def crea_pdf(testo, titolo):
     buffer.seek(0)
     return buffer
 
-# --- GESTIONE STATO CHAT ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "contesto_chat_text" not in st.session_state:
-    st.session_state.contesto_chat_text = ""
+# --- GESTIONE STATO ---
+if "messages" not in st.session_state: st.session_state.messages = []
+if "contesto_chat_text" not in st.session_state: st.session_state.contesto_chat_text = ""
 
-# --- UI SIDEBAR ---
+# --- SIDEBAR & ADMIN ---
 with st.sidebar:
-    st.markdown("### ⚙️ Opzioni Produzione")
-    formato_output = st.radio("Formato Documenti:", ["Word (.docx)", "PDF (.pdf)"])
+    st.markdown("### ⚙️ Configurazione")
+    formato_output = st.radio("Formato Output:", ["Word (.docx)", "PDF (.pdf)"])
     
     st.divider()
     st.markdown("### 📞 Contatti")
     st.markdown("""
     <div style='background-color: #f0f2f6; padding: 10px; border-radius: 5px;'>
         <p>📱 <a href='https://wa.me/393758269561'>WhatsApp</a></p>
+        <p>📅 <a href='https://calendar.app.google/y4QwPGmH9V7yGpny5' target='_blank'><strong>Prenota Consulenza</strong></a></p>
         <p>✉️ <a href='mailto:info@periziedilizie.it'>info@periziedilizie.it</a></p>
     </div>""", unsafe_allow_html=True)
     
-    # BACKDOOR ADMIN
-    with st.expander("🛠️ Admin Area"):
+    # ADMIN PANEL AVANZATO
+    with st.expander("🛠️ Admin / Debug"):
         pwd = st.text_input("Password", type="password")
-        # Usa i secrets per la password reale
-        admin_secret = st.secrets.get("ADMIN_PASSWORD", "admin")
-        is_admin = (pwd == admin_secret)
+        is_admin = (pwd == st.secrets.get("ADMIN_PASSWORD", "admin"))
+        
+        if is_admin:
+            st.success("Admin Logged In")
+            st.markdown("**Override Motore AI**")
+            # L'admin può forzare un modello specifico indipendentemente dalla scelta utente
+            override_model = st.selectbox("Forza Modello (Debug)", ["Nessuno (Usa Logica App)", "gpt-4o", "gpt-4o-mini"])
+        else:
+            override_model = "Nessuno (Usa Logica App)"
 
 # --- MAIN APP ---
 st.title("⚖️ Ingegneria Forense & Strategy AI")
 
-tab1, tab2 = st.tabs(["💬 1. Caricamento & Strategia", "📄 2. Generazione Documenti"])
+tab1, tab2, tab3 = st.tabs(["🏠 Calcolatore", "💬 Analisi Strategica (Chat)", "📄 Generazione Documenti"])
 
 # ==============================================================================
-# TAB 1: CHATBOT INTERVISTATORE
+# TAB 1: CALCOLATORE (Invariato)
 # ==============================================================================
 with tab1:
-    st.write("### Carica il fascicolo")
-    st.info("L'AI legge PDF, Testi e Immagini (Scansioni, Foto, Planimetrie).")
-    
-    uploaded_files = st.file_uploader(
-        "Trascina qui i file", 
-        accept_multiple_files=True, 
-        type=["pdf", "txt", "jpg", "png", "jpeg"]
-    )
+    st.header("📉 Calcolatore Valore & Criticità")
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        valore_mercato = st.number_input("Valore Mercato (€)", min_value=0, value=350000, step=10000)
+        c1 = st.checkbox("Assenza Agibilità")
+        c2 = st.checkbox("Condono non perfezionato")
+        c3 = st.checkbox("Difformità Catastali")
+        btn_calcola = st.button("Calcola Deprezzamento", type="primary")
+
+    with col2:
+        if btn_calcola:
+            deprezzamento = 0
+            rischi = []
+            if c1: deprezzamento += 0.15 
+            if c2: deprezzamento += 0.20
+            if c3: deprezzamento += 0.05
+            
+            valore_reale = valore_mercato * (1 - deprezzamento)
+            st.success(f"### Valore Giudiziale Stimato: € {valore_reale:,.2f}")
+            st.metric("Deprezzamento", f"- {deprezzamento*100:.0f}%", f"- € {(valore_mercato - valore_reale):,.2f}")
+
+# ==============================================================================
+# TAB 2: CHATBOT (Ottimizzato sui Costi)
+# ==============================================================================
+with tab2:
+    st.write("### 1. Carica il Fascicolo")
+    uploaded_files = st.file_uploader("Trascina file (PDF, IMG, TXT)", accept_multiple_files=True, type=["pdf", "txt", "jpg", "png", "jpeg"], key="uploader")
     
     if uploaded_files:
-        st.success(f"✅ {len(uploaded_files)} file pronti per l'analisi.")
+        st.success(f"✅ {len(uploaded_files)} file caricati.")
         st.divider()
-        
         st.subheader("🤖 Assistente Strategico")
-        st.markdown("Chatta con l'AI per definire la linea difensiva. L'AI ha 'letto' i tuoi file.")
-
-        # Messaggio di benvenuto se la chat è vuota
+        
         if not st.session_state.messages:
-            msg_start = "Ho analizzato preliminarmente i documenti. Qual è l'obiettivo principale? (Es. Transare al ribasso, Attaccare la CTU, Invalidare tutto...)"
-            st.session_state.messages.append({"role": "assistant", "content": msg_start})
+            st.session_state.messages.append({"role": "assistant", "content": "Ho ricevuto i file. Qual è l'obiettivo? (Es. Transare, Attaccare CTU...)"})
 
-        # Visualizza Chat History
         for msg in st.session_state.messages:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-        # Input Utente
-        if prompt_utente := st.chat_input("Es. Vogliamo dimostrare che l'immobile non è abitabile..."):
+        if prompt := st.chat_input("Scrivi la tua strategia..."):
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            st.session_state.contesto_chat_text += f"\nUtente: {prompt}"
+            with st.chat_message("user"): st.markdown(prompt)
             
-            # 1. Salva messaggio utente
-            st.session_state.messages.append({"role": "user", "content": prompt_utente})
-            st.session_state.contesto_chat_text += f"\nUtente: {prompt_utente}"
-            with st.chat_message("user"):
-                st.markdown(prompt_utente)
-            
-            # 2. Risposta AI
             with st.chat_message("assistant"):
-                with st.spinner("L'AI sta analizzando i file e la tua richiesta..."):
+                with st.spinner("Analisi..."):
+                    payload = prepara_input_multimodale(uploaded_files)
+                    prompt_sys = "Sei un Perito Forense. Intervista l'avvocato per capire la strategia. Fai domande brevi."
                     
-                    # Prepariamo i file per la chat (così l'AI sa di cosa parli)
-                    payload_chat = prepara_input_multimodale(uploaded_files)
-                    
-                    prompt_chat_system = """
-                    Sei un Perito Forense Senior. 
-                    Il tuo compito ORA è intervistare l'avvocato.
-                    NON scrivere ancora la perizia completa.
-                    Fai domande brevi e strategiche basate sui documenti che vedi e sulla risposta dell'utente.
-                    Lo scopo è raccogliere informazioni per redigere poi i documenti finali.
-                    """
-                    
-                    risposta_ai = interroga_llm_multimodale(prompt_chat_system, st.session_state.contesto_chat_text, payload_chat)
-                    
-                    st.markdown(risposta_ai)
-                    st.session_state.messages.append({"role": "assistant", "content": risposta_ai})
-                    st.session_state.contesto_chat_text += f"\nAI: {risposta_ai}"
+                    # QUI USIAMO IL MODELLO ECONOMICO PER LA CHAT
+                    modello_chat = "gpt-4o-mini"
+                    if override_model != "Nessuno (Usa Logica App)":
+                        modello_chat = override_model
+                        
+                    risposta = interroga_llm_multimodale(prompt_sys, st.session_state.contesto_chat_text, payload, modello_chat)
+                    st.markdown(risposta)
+                    st.session_state.messages.append({"role": "assistant", "content": risposta})
+                    st.session_state.contesto_chat_text += f"\nAI: {risposta}"
 
 # ==============================================================================
-# TAB 2: GENERAZIONE DOCUMENTI
+# TAB 3: GENERAZIONE DOCUMENTI (Prezzi Dinamici)
 # ==============================================================================
-with tab2:
+with tab3:
     if not uploaded_files:
-        st.warning("⚠️ Torna al Tab 1 e carica prima i file.")
+        st.warning("⚠️ Carica prima i file nel Tab 'Analisi Strategica'.")
     else:
         st.header("🛒 Generazione Prodotti")
-        st.write("L'AI utilizzerà i documenti caricati E la strategia discussa in chat.")
+        st.write("Configura la profondità dell'analisi e il costo.")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            p1 = st.checkbox("Timeline Cronologica (€ 90)")
-            p2 = st.checkbox("Sintesi del Fatto (€ 90)")
-        with col2:
-            p3 = st.checkbox("Punti di Attacco Tecnici (€ 190)")
-            p4 = st.checkbox("Strategia Processuale (€ 390)")
+        # --- SELETTORE LIVELLO ANALISI ---
+        livello_analisi = st.radio(
+            "Seleziona Livello di Analisi:",
+            ["STANDARD (Veloce ed Economica)", "PREMIUM (Strategica e Approfondita)"],
+            index=1,
+            help="Standard usa AI rapida. Premium usa il modello più potente al mondo per ragionamenti complessi."
+        )
+
+        # LOGICA PREZZI E MODELLO
+        if "STANDARD" in livello_analisi:
+            modello_doc = "gpt-4o-mini"
+            prezzi = {"timeline": 29, "sintesi": 29, "attacco": 89, "strategia": 149}
+            desc_modello = "Analisi effettuata con motore rapido (GPT-4o Mini)."
+        else:
+            modello_doc = "gpt-4o"
+            prezzi = {"timeline": 90, "sintesi": 90, "attacco": 190, "strategia": 390}
+            desc_modello = "Analisi effettuata con motore Top di Gamma (GPT-4o) per massima precisione giuridica."
+
+        # Override Admin
+        if override_model != "Nessuno (Usa Logica App)":
+            modello_doc = override_model
+            st.warning(f"⚠️ MODALITÀ DEBUG: Forzato modello {modello_doc} indipendentemente dal livello scelto.")
+
+        st.caption(f"ℹ️ {desc_modello}")
+        st.divider()
+
+        c1, c2 = st.columns(2)
+        with c1:
+            p1 = st.checkbox(f"Timeline Cronologica (€ {prezzi['timeline']})")
+            p2 = st.checkbox(f"Sintesi Vicende (€ {prezzi['sintesi']})")
+        with c2:
+            p3 = st.checkbox(f"Punti Attacco Tecnici (€ {prezzi['attacco']})")
+            p4 = st.checkbox(f"Strategia Processuale (€ {prezzi['strategia']})")
             
-        selected_items = []
-        if p1: selected_items.append("timeline")
-        if p2: selected_items.append("sintesi")
-        if p3: selected_items.append("attacco")
-        if p4: selected_items.append("strategia")
+        selected = []
+        totale = 0
+        if p1: 
+            selected.append("timeline")
+            totale += prezzi['timeline']
+        if p2: 
+            selected.append("sintesi")
+            totale += prezzi['sintesi']
+        if p3: 
+            selected.append("attacco")
+            totale += prezzi['attacco']
+        if p4: 
+            selected.append("strategia")
+            totale += prezzi['strategia']
         
-        prezzi = {"timeline": 90, "sintesi": 90, "attacco": 190, "strategia": 390}
-        totale = sum([prezzi[k] for k in selected_items])
-        
-        if selected_items:
-            st.divider()
-            st.subheader(f"Totale: € {totale}")
+        if selected:
+            st.write(f"### Totale Ordine: € {totale}")
             
-            # Verifica permessi (Admin o Pagamento)
-            can_download = False
-            if is_admin:
-                st.success("🔓 Modalità Admin Attiva")
-                can_download = True
-            elif "session_id" in st.query_params:
-                st.success("✅ Pagamento Confermato")
-                can_download = True
-            else:
-                st.info("Demo Mode: Inserisci la password Admin nella barra laterale per sbloccare.")
+            can_dl = is_admin or "session_id" in st.query_params
+            if is_admin: st.success("🔓 Admin Mode (Download Gratis)")
+            elif can_dl: st.success("✅ Pagamento Verificato")
+            else: st.info("Demo Mode: Inserisci password Admin per procedere.")
             
-            if can_download:
+            if can_dl:
                 if st.button("🚀 Genera Documenti"):
+                    payload = prepara_input_multimodale(uploaded_files)
                     
-                    # Prepariamo i file una volta sola
-                    payload_doc = prepara_input_multimodale(uploaded_files)
+                    prompts = {
+                        "timeline": "Crea Timeline Cronologica rigorosa. Data | Evento | Rif. Doc.",
+                        "sintesi": "Redigi Sintesi Tecnica formale.",
+                        "attacco": "Agisci come CTP aggressivo. Trova errori CTU/Controparte (Norme UNI/Cassazione).",
+                        "strategia": "Elabora Strategia (Ottimistica/Pessimistica) e Next Best Action."
+                    }
                     
-                    for item in selected_items:
-                        with st.status(f"Generazione {item.upper()} in corso...", expanded=True) as status:
+                    for item in selected:
+                        with st.status(f"Generazione {item} con {modello_doc}...", expanded=True) as s:
+                            # Passiamo il modello corretto alla funzione
+                            txt = interroga_llm_multimodale(prompts[item], st.session_state.contesto_chat_text, payload, modello_doc)
                             
-                            # PROMPT SYSTEM SPECIFICI
-                            prompts = {
-                                "timeline": "Crea una TIMELINE CRONOLOGICA rigorosa. Data | Evento | Rif. Doc. Evidenzia termini prescrizione.",
-                                "sintesi": "Redigi una SINTESI TECNICA dei fatti rilevanti per la causa. Linguaggio formale e oggettivo.",
-                                "attacco": "Agisci come CTP aggressivo. Trova vizi, difformità, errori nella controparte/CTU basandoti sui file (norme UNI/ISO/Cassazione).",
-                                "strategia": "Elabora 3 Scenari (Ottimistico, Realistico, Pessimistico) e consiglia la Next Best Action legale/tecnica."
-                            }
+                            ext = "docx" if formato_output == "Word (.docx)" else "pdf"
+                            mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if ext == "docx" else "application/pdf"
+                            buf = crea_word(txt, item) if ext == "docx" else crea_pdf(txt, item)
                             
-                            # Generazione AI
-                            testo_out = interroga_llm_multimodale(prompts[item], st.session_state.contesto_chat_text, payload_doc)
-                            
-                            # Creazione File
-                            status.write("Formattazione file...")
-                            if formato_output == "Word (.docx)":
-                                buffer = crea_word(testo_out, f"Report: {item.upper()}")
-                                mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                                ext = "docx"
-                            else:
-                                buffer = crea_pdf(testo_out, f"Report: {item.upper()}")
-                                mime = "application/pdf"
-                                ext = "pdf"
-                                
-                            # Download
-                            st.download_button(
-                                label=f"📥 Scarica {item.upper()}",
-                                data=buffer,
-                                file_name=f"Cavalaglio_{item}.{ext}",
-                                mime=mime,
-                                key=f"dl_{item}"
-                            )
-                            status.update(label=f"✅ {item.upper()} Completato!", state="complete")
+                            st.download_button(f"📥 Scarica {item}", data=buf, file_name=f"{item}.{ext}", mime=mime)
+                            s.update(label="Fatto!", state="complete")
