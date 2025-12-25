@@ -3,4 +3,4 @@ openai
 pypdf
 python-docx
 fpdf
-google-generativeai
+google-generativeai>=0.7.0
