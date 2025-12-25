@@ -169,7 +169,7 @@ with tab2:
             # --- 🛠️ SEZIONE ADMIN (BACKDOOR) ---
             is_admin = False
             with st.expander("🛠️ Area Riservata (Admin / Debug)"):
-                admin_pwd = st.text_input("Password Admin", type="password", help("Inserisci la password per scaricare senza pagare"))
+               admin_pwd = st.text_input("Password Admin", type="password", help="Inserisci la password per scaricare senza pagare")
                 # Verifica sicura tramite st.secrets (o fallback per test locale)
                 segreto_reale = st.secrets.get("ADMIN_PASSWORD", "admin") 
                 if admin_pwd == segreto_reale:
@@ -213,3 +213,4 @@ with tab2:
                     # Per ora mettiamo un link finto o disabilitato
                     st.info("⚠️ Configura Stripe nei Secrets per attivare il pagamento reale.")
                     # st.link_button("Procedi al pagamento", url_pagamento)
+
