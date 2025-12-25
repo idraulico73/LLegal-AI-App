@@ -14,15 +14,31 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from fpdf import FPDF
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(page_title="Ingegneria Forense & Strategy AI (V18 - AutoDiscovery)", layout="wide")
+st.set_page_config(page_title="Ingegneria Forense & Strategy AI (V19 - Dynamic)", layout="wide")
 
+# --- CONNESSIONE GOOGLE & AUTO-DISCOVERY ---
+available_models = []
 try:
     GENAI_KEY = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=GENAI_KEY)
     HAS_KEY = True
+    
+    # CHIEDIAMO A GOOGLE QUALI MODELLI ESISTONO PER QUESTA CHIAVE
+    try:
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                # Puliamo il nome (spesso è 'models/gemini-pro')
+                available_models.append(m.name)
+    except Exception as e:
+        st.error(f"Errore connessione Google: {e}")
+        
 except:
     st.warning("⚠️ Chiave API GOOGLE_API_KEY non trovata nei Secrets.")
     HAS_KEY = False
+
+# Fallback se la lista è vuota (per evitare crash)
+if not available_models:
+    available_models = ["gemini-1.5-flash", "gemini-1.5-pro"]
 
 # --- GESTIONE STATO ---
 if "messages" not in st.session_state: st.session_state.messages = []
@@ -78,17 +94,9 @@ def prepara_input_gemini(uploaded_files):
             
     return input_parts, log_lettura
 
-def interroga_gemini_resiliente(prompt_sistema, contesto_chat, input_parts, livello_scelto, postura_scelta):
-    """
-    Funzione 'ROVER' che cerca il modello funzionante.
-    """
+def interroga_gemini_dynamic(prompt_sistema, contesto_chat, input_parts, modello_reale, postura_scelta):
+    """Usa il modello selezionato dinamicamente dalla lista"""
     if not HAS_KEY: return "ERRORE: API Key mancante."
-
-    # LISTE DI CANDIDATI (Dal più recente al più vecchio)
-    if livello_scelto == "Premium":
-        candidates = ["gemini-1.5-pro-latest", "gemini-1.5-pro", "gemini-1.5-pro-001", "gemini-1.5-pro-002", "gemini-pro"]
-    else:
-        candidates = ["gemini-1.5-flash-latest", "gemini-1.5-flash", "gemini-1.5-flash-001", "gemini-1.5-flash-002", "gemini-flash"]
 
     # SYSTEM PROMPT
     system_instruction = f"""
@@ -116,26 +124,12 @@ def interroga_gemini_resiliente(prompt_sistema, contesto_chat, input_parts, live
     prompt_finale = f"\n\n--- RICHIESTA UTENTE ---\n{prompt_sistema}\n\nRispondi in Italiano dettagliato (Markdown)."
     contenuto_chiamata = input_parts + [prompt_finale]
 
-    # LOOP DI TENTATIVI (AUTO-DISCOVERY)
-    last_error = ""
-    for model_name in candidates:
-        try:
-            # Tenta di creare il modello e generare
-            model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
-            response = model.generate_content(contenuto_chiamata, safety_settings=safety_settings)
-            return response.text # Se arriva qui, ha funzionato!
-        except Exception as e:
-            err_str = str(e)
-            # Se è un errore 404 (Not Found) o 400 (Bad Request), prova il prossimo candidato
-            if "404" in err_str or "not found" in err_str.lower() or "400" in err_str:
-                continue 
-            else:
-                last_error = err_str
-                # Se è un altro errore (es. Quota), fermati e riportalo
-                break
-    
-    # Se usciamo dal loop senza successo:
-    return f"ERRORE IRRISOLVIBILE: Nessun modello funzionante trovato. Ultimo errore: {last_error}"
+    try:
+        model = genai.GenerativeModel(modello_reale, system_instruction=system_instruction)
+        response = model.generate_content(contenuto_chiamata, safety_settings=safety_settings)
+        return response.text
+    except Exception as e:
+        return f"Errore Gemini ({modello_reale}): {e}"
 
 def crea_word(testo, titolo):
     doc = Document()
@@ -163,8 +157,25 @@ def crea_pdf(testo, titolo):
 # --- SIDEBAR ---
 with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/8/8a/Google_Gemini_logo.svg", width=150)
-    st.markdown("### ⚙️ Gemini Vision AI")
-    postura = st.radio("Postura:", ["Diplomatica", "Aggressiva"], index=1)
+    st.markdown("### ⚙️ Configurazione AI")
+    
+    # AUTO-DISCOVERY MENU
+    # Cerchiamo di preselezionare un modello "Pro" o "1.5" se esiste
+    index_default = 0
+    for i, m in enumerate(available_models):
+        if "1.5-pro" in m and "latest" in m:
+            index_default = i
+            break
+            
+    selected_model_name = st.selectbox(
+        "Seleziona Modello Attivo:", 
+        available_models, 
+        index=index_default,
+        help="Questa lista viene caricata direttamente dal tuo account Google."
+    )
+    
+    st.divider()
+    postura = st.radio("Postura Strategica:", ["Diplomatica", "Aggressiva"], index=1)
     formato_output = st.radio("Output:", ["Word", "PDF"])
     
     with st.expander("🛠️ Admin"):
@@ -173,12 +184,12 @@ with st.sidebar:
 
 # --- MAIN APP ---
 st.title("⚖️ Ingegneria Forense & Strategy AI")
-st.caption("Powered by Google Gemini 1.5 Pro (Auto-Discovery Engine)")
+st.caption(f"Motore Attivo: {selected_model_name} (Vision + Uncensored)")
 
 tab1, tab2, tab3 = st.tabs(["🏠 Calcolatore", "💬 Chat Strategica", "📄 Generazione Documenti"])
 
 # ==============================================================================
-# TAB 1: CALCOLATORE (Rif. Par. 4.4)
+# TAB 1: CALCOLATORE (Rif. Par. 4.4 PERIZIA)
 # ==============================================================================
 with tab1:
     st.header("📉 Calcolatore Deprezzamento (Rif. Par. 4.4 Perizia)")
@@ -189,6 +200,7 @@ with tab1:
         valore_base = st.number_input("Valore Base (€/mq o Totale)", value=1900.0, step=100.0)
         
         st.markdown("### Coefficienti Riduttivi")
+        # Checklist esatta dal Paragrafo 4.4 della Perizia Familiari
         c1 = st.checkbox("Irregolarità urbanistica grave (30%)", value=True)
         c2 = st.checkbox("Superfici non abitabili/Incidenza (18%)", value=True)
         c3 = st.checkbox("Assenza mutuabilità (15%)", value=True)
@@ -223,7 +235,7 @@ with tab1:
             st.success(f"### Valore Netto Stimato: € {valore_finale:,.2f}")
             st.metric("Deprezzamento Totale Cumulato", f"- {deprezzamento_totale_perc:.2f}%")
             st.markdown("**Dettaglio applicato:**")
-            st.code(" * ".join(dettaglio) + f" = {(fattore_residuo):.4f}")
+            st.code(" * ".join(dettaglio) + f" = {(fattore_residuo):.4f} (Coeff. Residuo)")
 
 # ==============================================================================
 # TAB 2: CHAT GEMINI
@@ -251,11 +263,11 @@ with tab2:
             with st.chat_message("user"): st.markdown(prompt)
             
             with st.chat_message("assistant"):
-                with st.spinner("Gemini sta analizzando..."):
+                with st.spinner(f"Gemini ({selected_model_name}) sta analizzando..."):
                     parts_dossier, _ = prepara_input_gemini(uploaded_files)
                     
-                    # Usa la nuova funzione resiliente
-                    risposta = interroga_gemini_resiliente(prompt, st.session_state.contesto_chat_text, parts_dossier, "Premium", postura)
+                    # Usa il modello selezionato nella sidebar
+                    risposta = interroga_gemini_dynamic(prompt, st.session_state.contesto_chat_text, parts_dossier, selected_model_name, postura)
                     
                     st.markdown(risposta)
                     st.session_state.messages.append({"role": "assistant", "content": risposta})
@@ -269,8 +281,7 @@ with tab3:
         st.warning("Carica i file nel Tab Chat prima.")
     else:
         st.header("🛒 Generazione Documenti")
-        
-        livello = st.radio("Motore AI:", ["Standard (Flash)", "Premium (Pro)"], index=1)
+        st.caption(f"Generazione affidata a: {selected_model_name}")
         
         c1, c2 = st.columns(2)
         with c1:
@@ -294,8 +305,8 @@ with tab3:
                 prog = st.progress(0)
                 for i, (nome, prompt_doc) in enumerate(selected):
                     with st.status(f"Generazione {nome}...", expanded=True):
-                        # Usa la funzione resiliente anche qui
-                        txt = interroga_gemini_resiliente(prompt_doc, st.session_state.contesto_chat_text, parts_dossier, livello, postura)
+                        # Usa il modello selezionato nella sidebar
+                        txt = interroga_gemini_dynamic(prompt_doc, st.session_state.contesto_chat_text, parts_dossier, selected_model_name, postura)
                         
                         if formato_output == "Word":
                             buf = crea_word(txt, nome)
