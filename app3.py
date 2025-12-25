@@ -1,188 +1,188 @@
 import streamlit as st
-import openai
-from PyPDF2 import PdfReader
-import fitz  # Questo è PyMuPDF
-import base64
-import os
-from io import BytesIO
+import pandas as pd
+from datetime import datetime
+import time
 
 # --- CONFIGURAZIONE PAGINA ---
-st.set_page_config(
-    page_title="Ingegneria Processuale | Analisi Vision AI",
-    page_icon="⚖️",
-    layout="centered"
-)
+st.set_page_config(page_title="Ingegneria Forense & Strategy", layout="wide")
 
-# --- CSS PRO ---
-st.markdown("""
-    <style>
-    .big-font { font-size:20px !important; font-weight: bold; }
-    .stSelectbox label { font-size: 18px; font-weight: bold; color: #1e3a8a; }
-    div[data-testid="stMetricValue"] { color: #15803d; font-weight: bold; }
-    .package-box { background-color: #f0fdf4; padding: 20px; border-radius: 10px; border-left: 5px solid #15803d; margin-top: 20px; }
-    </style>
-    """, unsafe_allow_html=True)
+# --- FUNZIONI DI UTILITÀ (MOCKUP) ---
+def stima_pagine_pdf(file):
+    # Qui andrebbe l'integrazione con PyPDF2 per contare le pagine reali
+    # Per ora stimiamo 1 pagina per MB o fisso per demo
+    return max(1, int(file.size / 100000))
 
-# --- SETUP API KEY ---
-DEFAULT_KEY = st.secrets.get("OPENAI_API_KEY", "") if hasattr(st, "secrets") else ""
-DEFAULT_KEY = DEFAULT_KEY or os.getenv("OPENAI_API_KEY", "")
+def genera_anteprima_ai(testo_input, tipo_output):
+    time.sleep(1) # Simula elaborazione
+    anteprime = {
+        "timeline": "12/05/2020: Deposito CILA...\n15/06/2021: Notifica Atto di Citazione...\n[CONTENUTO BLOCCATO - ACQUISTA PER VEDERE TUTTO]",
+        "sintesi": "Il contenzioso verte sulla difformità urbanistica dell'immobile sito in...\nLe parti sostengono rispettivamente che...\n[CONTENUTO BLOCCATO]",
+        "punti_attacco": "1. Mancanza di Agibilità (Cass. Civ. 2011)...\n2. Errore calcolo superfici CTU...\n3. [OSCURATO]...\n4. [OSCURATO]...",
+        "strategia": "Si consiglia di procedere con Istanza di Sospensione basata su...\nIl valore recuperabile è stimato in...\n[CONTENUTO COMPLETO DISPONIBILE NELLA VERSIONE FULL]"
+    }
+    return anteprime.get(tipo_output, "Anteprima non disponibile")
 
-# --- SIDEBAR ---
+# --- SIDEBAR: CONTATTI SEMPRE VISIBILI ---
 with st.sidebar:
-    if DEFAULT_KEY:
-        api_key = DEFAULT_KEY
-    else:
-        st.header("⚙️ Configurazione")
-        api_key = st.text_input("OpenAI API Key", type="password")
+    st.image("https://via.placeholder.com/150x50?text=LOGO+STUDIO", use_column_width=True) # Placeholder Logo
+    st.markdown("### 📞 Contatti Diretti")
     
-    st.divider()
-    st.info("Compila per ricevere l'analisi.")
-    nome = st.text_input("Nome e Cognome")
-    email = st.text_input("Email")
-    telefono = st.text_input("Telefono")
-
-# --- INTERFACCIA ---
-st.title("⚖️ Analisi Scansioni & Documenti")
-st.markdown("""
-**Il sistema legge tutto.** Carica PDF nativi, scansioni vecchie o foto di atti. 
-L'AI riconoscerà il testo anche dalle immagini.
-""")
-
-st.divider()
-
-ambito = st.selectbox(
-    "Seleziona l'Area di Intervento:",
-    [
-        "🏗️ Immobiliare & Urbanistica",
-        "🏦 Bancario & Finanziario",
-        "🏥 Responsabilità Medica",
-        "🚗 Infortunistica & Assicurazioni",
-        "🏭 Sicurezza sul Lavoro"
-    ]
-)
-
-budget = st.selectbox(
-    "Budget indicativo:",
-    ["Non lo so / Da valutare", "€ 500 - € 2.000", "Oltre € 2.000", "Sotto € 500"]
-)
-
-obiettivo = st.text_area(
-    "Obiettivo specifico:",
-    placeholder="Es: Analisi scansione vecchia del 1985...",
-    height=100
-)
-
-uploaded_file = st.file_uploader("Carica Documento (PDF anche scansione)", type="pdf")
-
-# --- FUNZIONI VISION & TEXT ---
-
-def pdf_page_to_base64(pdf_bytes, page_num):
-    """Converte una pagina PDF in immagine Base64 per GPT-4o Vision"""
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    page = doc.load_page(page_num)
-    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) # Zoom 2x per leggere meglio
-    img_data = pix.tobytes("png")
-    return base64.b64encode(img_data).decode('utf-8')
-
-def analyze_hybrid(file_bytes, user_goal, key, prompt_sys):
-    client = openai.OpenAI(api_key=key)
+    st.markdown("""
+    <div style='background-color: #f0f2f6; padding: 10px; border-radius: 5px;'>
+        <p>📱 <a href='https://wa.me/393758269561' target='_blank'><strong>WhatsApp</strong></a></p>
+        <p>📅 <a href='https://calendar.app.google/y4QwPGmH9V7yGpny5' target='_blank'><strong>Prenota Consulenza</strong></a></p>
+        <p>✉️ <a href='mailto:info@periziedilizie.it'><strong>info@periziedilizie.it</strong></a></p>
+    </div>
+    """, unsafe_allow_html=True)
     
-    # 1. TENTATIVO TESTO (Veloce ed Economico)
-    reader = PdfReader(BytesIO(file_bytes))
-    text_content = ""
-    max_pages = 10 # Limite pagine
-    for i, page in enumerate(reader.pages[:max_pages]):
-        text_content += page.extract_text() or ""
+    st.info("ℹ️ I documenti completi vengono sbloccati dopo il pagamento.")
+
+# --- TITOLO PRINCIPALE ---
+st.title("⚖️ Ingegneria Forense & Strategy AI")
+st.markdown("Strumenti avanzati per Avvocati e Studi Legali. Analisi tecnica, strategia e calcolo del valore.")
+
+# --- TABS PRINCIPALI ---
+tab1, tab2 = st.tabs(["🏠 Calcolatore & Checklist CTU", "📄 Macina Documenti (AI)"])
+
+# ==============================================================================
+# TAB 1: CHECKLIST & CALCOLATORE (Unified)
+# ==============================================================================
+with tab1:
+    st.header("Analisi Rapida Valore & Criticità")
     
-    # 2. DECISIONE STRATEGICA
-    # Se ha trovato meno di 50 caratteri in totale, è probabilmente una scansione
-    is_scan = len(text_content) < 50
+    col1, col2 = st.columns([1, 2])
     
-    messages = [{"role": "system", "content": prompt_sys}]
-    
-    if is_scan:
-        # --- MODALITÀ VISION (Costosa ma Potente) ---
-        st.toast("⚠️ Scansione rilevata! Attivo la lettura ottica AI (Vision)...")
+    with col1:
+        st.subheader("Dati Immobile")
+        valore_mercato = st.number_input("Valore di Mercato Teorico (€)", min_value=0, value=350000, step=10000)
+        mq_comm = st.number_input("Superficie Commerciale (mq)", min_value=0, value=120)
         
-        # Prendiamo le prime 4 pagine come immagini (per risparmiare costi API)
-        content_payload = [{"type": "text", "text": f"OBIETTIVO CLIENTE: {user_goal}. Analizza queste immagini del documento:"}]
+        st.subheader("Checklist Criticità")
+        c1 = st.checkbox("Assenza Certificato Agibilità/Abitabilità")
+        c2 = st.checkbox("Condono in corso (non perfezionato)")
+        c3 = st.checkbox("Difformità Catastali (es. tramezzi spostati)")
+        c4 = st.checkbox("Difformità Volumetriche (es. ampliamenti, chiusure)")
+        c5 = st.checkbox("Impianti non a norma (no DICO)")
         
-        doc_len = len(reader.pages)
-        pages_to_scan = min(4, doc_len)
-        
-        for i in range(pages_to_scan):
-            base64_image = pdf_page_to_base64(file_bytes, i)
-            content_payload.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{base64_image}"}
-            })
+        btn_calcola = st.button("📉 Calcola Valore Reale e Genera Report", type="primary")
+
+    with col2:
+        if btn_calcola:
+            # Logica di calcolo (Semplificata per demo)
+            deprezzamento = 0
+            rischi = []
             
-        messages.append({"role": "user", "content": content_payload})
-        
-    else:
-        # --- MODALITÀ TESTO (Standard) ---
-        prompt_user = f"OBIETTIVO CLIENTE:\n{user_goal}\n\nTESTO ESTRATTO DAL PDF:\n{text_content[:15000]}"
-        messages.append({"role": "user", "content": prompt_user})
+            if c1: 
+                deprezzamento += 0.15 
+                rischi.append("Aliud pro alio (Cass. 24343/2011)")
+            if c2: 
+                deprezzamento += 0.20
+                rischi.append("Rischio incommerciabilità e costi oblazione")
+            if c3: deprezzamento += 0.02
+            if c4: deprezzamento += 0.10
+            if c5: deprezzamento += 0.05
+            
+            valore_reale = valore_mercato * (1 - deprezzamento)
+            perdita = valore_mercato - valore_reale
+            
+            # OUTPUT GRATUITO
+            st.success(f"### Valore Giudiziale Stimato: € {valore_reale:,.2f}")
+            st.metric("Deprezzamento Totale", f"- {deprezzamento*100:.0f}%", f"- € {perdita:,.2f}")
+            
+            # OUTPUT A PAGAMENTO (ANTEPRIMA)
+            st.divider()
+            st.warning("🔒 **ANTEPRIMA RELAZIONE TECNICA DI PARTE (Bozza)**")
+            
+            report_preview = f"""
+            OGGETTO: Analisi critica CTU e Valutazione
+            
+            Dall'analisi preliminare emergono i seguenti punti di attacco alla CTU avversaria:
+            1. {rischi[0] if rischi else 'Nessuna criticità maggiore rilevata'}...
+            2. Il valore non considera i costi di ripristino stimati in...
+            
+            [IL RESTO DEL DOCUMENTO È BLOCCATO]
+            """
+            st.text_area("Anteprima Documento", report_preview, height=150, disabled=True)
+            
+            col_buy, col_code = st.columns(2)
+            with col_buy:
+                st.write("**Prezzo Relazione Completa: € 390,00**")
+                if st.button("🛒 Acquista Relazione CTU"):
+                    st.toast("📧 Ordine inviato! Controlla la tua mail per il link di pagamento Stripe.")
+                    # Qui invieresti la mail reale a te stesso con i dettagli dell'ordine
+            
+            with col_code:
+                codice_sblocco = st.text_input("Hai già pagato? Inserisci Codice Sblocco", key="code_ctu")
+                if st.button("Sblocca Download", key="btn_unlock_ctu"):
+                    if codice_sblocco == "DEMO123": # Codice demo
+                        st.download_button("📥 Scarica Relazione.docx", data="Contenuto Documento...", file_name="Relazione_CTU.docx")
+                    else:
+                        st.error("Codice non valido.")
 
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            temperature=0.2,
-            max_tokens=1000
-        )
-        return response.choices[0].message.content, is_scan
-    except Exception as e:
-        return f"Errore: {str(e)}", False
-
-def get_system_prompt(ambito_scelto):
-    return f"""
-    Sei il Responsabile Commerciale Tecnico dello Studio Familiari.
+# ==============================================================================
+# TAB 2: MACINA DOCUMENTI (Multi-upload + Pricing)
+# ==============================================================================
+with tab2:
+    st.header("🤖 Analisi Documentale AI")
+    st.info("Carica fascicoli completi (PDF, Scansioni JPG/PNG). L'AI estrarrà dati e strategia.")
     
-    FORMATO RISPOSTA OBBLIGATORIO:
-    [DIAGNOSI]: 3 frasi dirette. Cita Date, Luoghi e Problemi Tecnici specifici.
-    [GANCIO]: Una frase che spiega perché serve l'intervento umano.
-    [COMPLESSITÀ]: BASSA o MEDIA o ALTA
-    """
-
-def safe_parse(ai_text):
-    try:
-        diagnosi = ai_text.split("[DIAGNOSI]:")[1].split("[GANCIO]:")[0].strip()
-        gancio = ai_text.split("[GANCIO]:")[1].split("[COMPLESSITÀ]:")[0].strip()
-        livello = ai_text.split("[COMPLESSITÀ]:")[1].strip()
-        return diagnosi, gancio, livello
-    except: return None, None, None
-
-def get_price(complexity):
-    if "ALTA" in complexity: return "2000", "3000"
-    if "MEDIA" in complexity: return "1000", "1800"
-    return "500", "800"
-
-# --- ESECUZIONE ---
-if st.button("🚀 Analizza Documento"):
-    if not api_key or not uploaded_file:
-        st.warning("Inserisci API Key e file.")
-    else:
-        with st.spinner("L'IA sta leggendo (se è una scansione ci vorrà qualche secondo in più)..."):
-            sys_prompt = get_system_prompt(ambito)
-            res, scan_mode = analyze_hybrid(uploaded_file.getvalue(), obiettivo, api_key, sys_prompt)
+    uploaded_files = st.file_uploader("Trascina qui i tuoi file", accept_multiple_files=True, type=['pdf', 'jpg', 'png', 'jpeg'])
+    
+    if uploaded_files:
+        totale_pagine = sum([stima_pagine_pdf(f) for f in uploaded_files])
+        costo_entry = totale_pagine * 1.0 # 1€ a pagina caricata
+        
+        st.write(f"📊 **Analisi Volumetrica:** {len(uploaded_files)} file caricati, circa {totale_pagine} pagine totali.")
+        st.write(f"💰 **Costo elaborazione (Entry Fee):** € {costo_entry:.2f}")
+        
+        st.divider()
+        st.subheader("Seleziona Prodotti da Generare")
+        
+        # Opzioni Prodotti
+        prodotti = {
+            "timeline": {"nome": "Timeline Cronologica", "prezzo": 90},
+            "sintesi": {"nome": "Sintesi Vicende", "prezzo": 90},
+            "punti": {"nome": "Punti di Attacco (CTU/Controparte)", "prezzo": 190},
+            "strategia": {"nome": "Strategia Processuale (Bozza)", "prezzo": 390}
+        }
+        
+        selected_prods = []
+        col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+        
+        with col_p1:
+            if st.checkbox("Timeline (€ 90)"): selected_prods.append("timeline")
+        with col_p2:
+            if st.checkbox("Sintesi (€ 90)"): selected_prods.append("sintesi")
+        with col_p3:
+            if st.checkbox("Punti Attacco (€ 190)"): selected_prods.append("punti")
+        with col_p4:
+            if st.checkbox("Strategia (€ 390)"): selected_prods.append("strategia")
             
-            diagnosi, gancio, livello = safe_parse(res)
+        totale_ordine = costo_entry + sum([prodotti[k]["prezzo"] for k in selected_prods])
+        
+        if selected_prods:
+            st.divider()
+            st.subheader(f"🛒 Totale Ordine: € {totale_ordine:.2f}")
             
-            if diagnosi:
-                st.balloons()
-                if scan_mode:
-                    st.info("👁️ **Modalità OCR attivata:** Il documento era una scansione, ma l'ho letto perfettamente.")
+            if st.button("🚀 Genera Anteprime e Invia Ordine"):
+                st.toast("Elaborazione in corso...")
                 
-                st.success("✅ Analisi Completata.")
-                st.markdown(f"### 🧐 Diagnosi: {diagnosi}")
-                st.warning(f"💡 {gancio}")
+                # Simulazione Generazione
+                st.write("### 👁️ Anteprime Documenti (Parziali)")
+                for k in selected_prods:
+                    with st.expander(f"Anteprima: {prodotti[k]['nome']}", expanded=True):
+                        st.text(genera_anteprima_ai("", k))
                 
-                min_p, max_p = get_price(livello)
-                st.markdown(f"""<div class="package-box"><h3>Preventivo: € {min_p} - € {max_p}</h3></div>""", unsafe_allow_html=True)
+                st.success("✅ Ordine inviato via mail! Riceverai il link per il pagamento.")
                 
-                # Call to action finale
-                st.divider()
-                st.markdown(f"**Interessato?** [Richiedi Call Strategica Gratuita](mailto:{email or 'info@periziedilizie.it'}?subject=Richiesta%20Call&body=Interessato%20al%20preventivo%20{min_p}-{max_p})")
-            else:
-                st.error("Errore lettura AI.")
+            st.divider()
+            st.markdown("### 🔓 Area Download")
+            c_sblocco = st.text_input("Inserisci Codice Ricevuto via Mail", key="code_macina")
+            if st.button("Verifica e Scarica", key="btn_unlock_macina"):
+                if c_sblocco == "DEMO123":
+                    st.success("Codice confermato! Ecco i tuoi file:")
+                    for k in selected_prods:
+                        st.download_button(f"Scarica {prodotti[k]['nome']}", data="Dati...", file_name=f"{k}.docx")
+                else:
+                    st.error("Codice non valido o pagamento non ancora registrato.")
+
