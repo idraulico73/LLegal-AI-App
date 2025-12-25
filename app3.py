@@ -5,7 +5,7 @@ import time
 import re
 import PIL.Image
 
-# Librerie per gestione file e AI
+# Librerie
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from pypdf import PdfReader
@@ -14,57 +14,61 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from fpdf import FPDF
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(page_title="Ingegneria Forense & Strategy AI (V20 - Autopilot)", layout="wide")
+st.set_page_config(page_title="Ingegneria Forense AI (V21 - Autopilot)", layout="wide")
 
-# --- AUTO-CONFIGURAZIONE MODELLO (IL "CERVELLO" AUTOMATICO) ---
-active_model_name = None
-status_msg = "In attesa di configurazione..."
+# --- LOGICA "CERVELLO" AUTOMATICO (Nessuna scelta utente) ---
+active_model = None
+status_text = "Inizializzazione..."
+status_color = "off" # off, green, red
 
 try:
     GENAI_KEY = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=GENAI_KEY)
     HAS_KEY = True
     
-    # 1. Scarica la lista dei modelli disponibili per la tua chiave
+    # 1. Chiediamo a Google cosa c'è disponibile
     all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
     
-    # 2. Cerca il migliore in ordine di priorità (Pro > Flash > Standard)
-    # Cerchiamo versioni stabili o latest
+    # 2. Lista di priorità (dal più intelligente al più veloce)
+    # Cerchiamo varianti del PRO, poi FLASH
     priority_list = [
         "models/gemini-1.5-pro-latest",
         "models/gemini-1.5-pro",
+        "models/gemini-1.5-pro-001",
         "models/gemini-1.5-pro-002",
         "models/gemini-1.5-flash-latest",
         "models/gemini-1.5-flash",
         "models/gemini-pro"
     ]
     
-    # Trova il primo match
+    # 3. Selezione automatica del primo match
     for candidate in priority_list:
         if candidate in all_models:
-            active_model_name = candidate
+            active_model = candidate
             break
             
-    # Se non trova match esatti, prende il primo che contiene "1.5-pro" o "gemini"
-    if not active_model_name:
-        for m in all_models:
-            if "gemini" in m:
-                active_model_name = m
-                break
-                
-    status_msg = f"✅ Motore Attivo: {active_model_name}" if active_model_name else "❌ Nessun modello compatibile trovato."
+    # 4. Fallback estremo (se non trova nulla di noto, prende il primo della lista Google)
+    if not active_model and all_models:
+        active_model = all_models[0]
+        
+    if active_model:
+        status_text = f"Attivo: {active_model.replace('models/', '')}"
+        status_color = "green"
+    else:
+        status_text = "Nessun modello compatibile trovato."
+        status_color = "red"
 
 except Exception as e:
-    st.warning("⚠️ Chiave API non valida o errore di connessione.")
     HAS_KEY = False
-    status_msg = f"Errore: {e}"
+    status_text = f"Errore API: {e}"
+    status_color = "red"
 
 # --- GESTIONE STATO ---
 if "messages" not in st.session_state: st.session_state.messages = []
 if "contesto_chat_text" not in st.session_state: st.session_state.contesto_chat_text = ""
 if "generated_docs" not in st.session_state: st.session_state.generated_docs = {} 
 
-# --- FUNZIONI DI UTILITÀ ---
+# --- FUNZIONI ---
 
 def markdown_to_docx(doc, text):
     lines = text.split('\n')
@@ -114,9 +118,8 @@ def prepara_input_gemini(uploaded_files):
     return input_parts, log_lettura
 
 def interroga_gemini(prompt_sistema, contesto_chat, input_parts, modello, postura_scelta):
-    if not HAS_KEY or not modello: return "ERRORE: API Key mancante o Modello non trovato."
+    if not HAS_KEY or not modello: return "ERRORE: Sistema non inizializzato."
 
-    # SYSTEM PROMPT
     system_instruction = f"""
     SEI GEMINI, STRATEGA FORENSE SENIOR (Top 1%).
     
@@ -143,8 +146,8 @@ def interroga_gemini(prompt_sistema, contesto_chat, input_parts, modello, postur
     contenuto_chiamata = input_parts + [prompt_finale]
 
     try:
-        model = genai.GenerativeModel(modello, system_instruction=system_instruction)
-        response = model.generate_content(contenuto_chiamata, safety_settings=safety_settings)
+        model_instance = genai.GenerativeModel(modello, system_instruction=system_instruction)
+        response = model_instance.generate_content(contenuto_chiamata, safety_settings=safety_settings)
         return response.text
     except Exception as e:
         return f"Errore Gemini: {e}"
@@ -175,13 +178,13 @@ def crea_pdf(testo, titolo):
 # --- SIDEBAR ---
 with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/8/8a/Google_Gemini_logo.svg", width=150)
-    st.markdown("### ⚙️ Stato Sistema")
+    st.markdown("### 🤖 Motore AI")
     
-    # Mostra solo lo stato, nessuna scelta manuale
-    if "✅" in status_msg:
-        st.success(status_msg)
+    # NESSUN MENU DI SCELTA! SOLO INFO.
+    if status_color == "green":
+        st.success(status_text)
     else:
-        st.error(status_msg)
+        st.error(status_text)
     
     st.divider()
     postura = st.radio("Postura Strategica:", ["Diplomatica", "Aggressiva"], index=1)
@@ -193,7 +196,7 @@ with st.sidebar:
 
 # --- MAIN APP ---
 st.title("⚖️ Ingegneria Forense & Strategy AI")
-st.caption(f"Motore Automatico: {active_model_name} (Vision + Uncensored)")
+st.caption(f"Versione 21.0 - Motore Automatico")
 
 tab1, tab2, tab3 = st.tabs(["🏠 Calcolatore", "💬 Chat Strategica", "📄 Generazione Documenti"])
 
@@ -209,7 +212,7 @@ with tab1:
         valore_base = st.number_input("Valore Base (€/mq o Totale)", value=1900.0, step=100.0)
         
         st.markdown("### Coefficienti Riduttivi")
-        # Checklist esatta dal Paragrafo 4.4 della Perizia Familiari
+        # Checklist esatta dal Paragrafo 4.4
         c1 = st.checkbox("Irregolarità urbanistica grave (30%)", value=True)
         c2 = st.checkbox("Superfici non abitabili/Incidenza (18%)", value=True)
         c3 = st.checkbox("Assenza mutuabilità (15%)", value=True)
@@ -244,14 +247,14 @@ with tab1:
             st.success(f"### Valore Netto Stimato: € {valore_finale:,.2f}")
             st.metric("Deprezzamento Totale Cumulato", f"- {deprezzamento_totale_perc:.2f}%")
             st.markdown("**Dettaglio applicato:**")
-            st.code(" * ".join(dettaglio) + f" = {(fattore_residuo):.4f} (Coeff. Residuo)")
+            st.code(" * ".join(dettaglio) + f" = {(fattore_residuo):.4f}")
 
 # ==============================================================================
 # TAB 2: CHAT GEMINI
 # ==============================================================================
 with tab2:
     st.write("### 1. Carica il Fascicolo")
-    st.caption("Supporta: PDF (anche scansioni), JPG, PNG, TXT")
+    st.caption("Supporta: PDF, JPG, PNG, TXT")
     uploaded_files = st.file_uploader("Trascina qui i file", accept_multiple_files=True, key="up_chat")
     
     if uploaded_files:
@@ -274,9 +277,7 @@ with tab2:
             with st.chat_message("assistant"):
                 with st.spinner(f"Gemini sta analizzando..."):
                     parts_dossier, _ = prepara_input_gemini(uploaded_files)
-                    # Usa il modello trovato automaticamente
-                    risposta = interroga_gemini(prompt, st.session_state.contesto_chat_text, parts_dossier, active_model_name, postura)
-                    
+                    risposta = interroga_gemini(prompt, st.session_state.contesto_chat_text, parts_dossier, active_model, postura)
                     st.markdown(risposta)
                     st.session_state.messages.append({"role": "assistant", "content": risposta})
                     st.session_state.contesto_chat_text += f"\nGemini: {risposta}"
@@ -289,7 +290,7 @@ with tab3:
         st.warning("Carica i file nel Tab Chat prima.")
     else:
         st.header("🛒 Generazione Documenti")
-        st.caption(f"Generazione affidata a: {active_model_name}")
+        st.caption(f"Generazione affidata a: {active_model}")
         
         c1, c2 = st.columns(2)
         with c1:
@@ -313,8 +314,7 @@ with tab3:
                 prog = st.progress(0)
                 for i, (nome, prompt_doc) in enumerate(selected):
                     with st.status(f"Generazione {nome}...", expanded=True):
-                        # Usa il modello trovato automaticamente
-                        txt = interroga_gemini(prompt_doc, st.session_state.contesto_chat_text, parts_dossier, active_model_name, postura)
+                        txt = interroga_gemini(prompt_doc, st.session_state.contesto_chat_text, parts_dossier, active_model, postura)
                         
                         if formato_output == "Word":
                             buf = crea_word(txt, nome)
