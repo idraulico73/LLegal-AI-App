@@ -120,7 +120,7 @@ with tab1:
                         st.error("Codice non valido.")
 
 # ==============================================================================
-# TAB 2: MACINA DOCUMENTI (Multi-upload + Pricing)
+# TAB 2: MACINA DOCUMENTI (Con Backdoor Admin)
 # ==============================================================================
 with tab2:
     st.header("🤖 Analisi Documentale AI")
@@ -128,9 +128,20 @@ with tab2:
     
     uploaded_files = st.file_uploader("Trascina qui i tuoi file", accept_multiple_files=True, type=['pdf', 'jpg', 'png', 'jpeg'])
     
+    # --- Inizializzazione variabili ---
+    prodotti = {
+        "timeline": {"nome": "Timeline Cronologica", "prezzo": 90},
+        "sintesi": {"nome": "Sintesi Vicende", "prezzo": 90},
+        "punti": {"nome": "Punti di Attacco (CTU/Controparte)", "prezzo": 190},
+        "strategia": {"nome": "Strategia Processuale (Bozza)", "prezzo": 390}
+    }
+    selected_prods = []
+    totale_ordine = 0.0
+
     if uploaded_files:
+        # Calcolo Costi
         totale_pagine = sum([stima_pagine_pdf(f) for f in uploaded_files])
-        costo_entry = totale_pagine * 1.0 # 1€ a pagina caricata
+        costo_entry = totale_pagine * 1.0 # 1€ a pagina
         
         st.write(f"📊 **Analisi Volumetrica:** {len(uploaded_files)} file caricati, circa {totale_pagine} pagine totali.")
         st.write(f"💰 **Costo elaborazione (Entry Fee):** € {costo_entry:.2f}")
@@ -138,17 +149,8 @@ with tab2:
         st.divider()
         st.subheader("Seleziona Prodotti da Generare")
         
-        # Opzioni Prodotti
-        prodotti = {
-            "timeline": {"nome": "Timeline Cronologica", "prezzo": 90},
-            "sintesi": {"nome": "Sintesi Vicende", "prezzo": 90},
-            "punti": {"nome": "Punti di Attacco (CTU/Controparte)", "prezzo": 190},
-            "strategia": {"nome": "Strategia Processuale (Bozza)", "prezzo": 390}
-        }
-        
-        selected_prods = []
+        # Selezione Prodotti
         col_p1, col_p2, col_p3, col_p4 = st.columns(4)
-        
         with col_p1:
             if st.checkbox("Timeline (€ 90)"): selected_prods.append("timeline")
         with col_p2:
@@ -163,26 +165,51 @@ with tab2:
         if selected_prods:
             st.divider()
             st.subheader(f"🛒 Totale Ordine: € {totale_ordine:.2f}")
-            
-            if st.button("🚀 Genera Anteprime e Invia Ordine"):
-                st.toast("Elaborazione in corso...")
-                
-                # Simulazione Generazione
-                st.write("### 👁️ Anteprime Documenti (Parziali)")
-                for k in selected_prods:
-                    with st.expander(f"Anteprima: {prodotti[k]['nome']}", expanded=True):
-                        st.text(genera_anteprima_ai("", k))
-                
-                st.success("✅ Ordine inviato via mail! Riceverai il link per il pagamento.")
-                
-            st.divider()
-            st.markdown("### 🔓 Area Download")
-            c_sblocco = st.text_input("Inserisci Codice Ricevuto via Mail", key="code_macina")
-            if st.button("Verifica e Scarica", key="btn_unlock_macina"):
-                if c_sblocco == "DEMO123":
-                    st.success("Codice confermato! Ecco i tuoi file:")
-                    for k in selected_prods:
-                        st.download_button(f"Scarica {prodotti[k]['nome']}", data="Dati...", file_name=f"{k}.docx")
-                else:
-                    st.error("Codice non valido o pagamento non ancora registrato.")
 
+            # --- 🛠️ SEZIONE ADMIN (BACKDOOR) ---
+            is_admin = False
+            with st.expander("🛠️ Area Riservata (Admin / Debug)"):
+                admin_pwd = st.text_input("Password Admin", type="password", help("Inserisci la password per scaricare senza pagare"))
+                # Verifica sicura tramite st.secrets (o fallback per test locale)
+                segreto_reale = st.secrets.get("ADMIN_PASSWORD", "admin") 
+                if admin_pwd == segreto_reale:
+                    is_admin = True
+                    st.success("🔓 Modalità Admin Attiva! Bypass pagamento abilitato.")
+
+            # --- LOGICA DI VISUALIZZAZIONE BOTTONI ---
+            
+            # CONDIZIONE DI SBLOCCO: O sei Admin, O hai pagato (session_id nell'URL)
+            if is_admin or "session_id" in st.query_params:
+                
+                if "session_id" in st.query_params and not is_admin:
+                    st.balloons()
+                    st.success("✅ Pagamento confermato! Ecco i tuoi documenti.")
+                
+                st.write("### 📥 Download Documenti")
+                
+                # Qui generi i file veri. Per ora usiamo dati simulati.
+                for k in selected_prods:
+                    # SIMULAZIONE CONTENUTO FILE
+                    file_content = f"DOCUMENTO: {prodotti[k]['nome']}\nCAUSA: Cavalaglio\nDATA: {datetime.now()}\n\n[Analisi generata dall'AI...]"
+                    
+                    st.download_button(
+                        label=f"Scarica {prodotti[k]['nome']}",
+                        data=file_content,
+                        file_name=f"{k}_Analisi_Cavalaglio.txt",
+                        mime="text/plain",
+                        key=f"btn_down_{k}"
+                    )
+                
+                # Tasto per resettare l'URL dopo il pagamento
+                if "session_id" in st.query_params:
+                    if st.button("Chiudi e Torna alla Home"):
+                        st.query_params.clear()
+                        st.rerun()
+
+            # CONDIZIONE NORMALE: Mostra pulsante Pagamento
+            else:
+                if st.button("💳 Paga e Scarica Subito", type="primary"):
+                    # Qui andrà la chiamata a crea_sessione_stripe()
+                    # Per ora mettiamo un link finto o disabilitato
+                    st.info("⚠️ Configura Stripe nei Secrets per attivare il pagamento reale.")
+                    # st.link_button("Procedi al pagamento", url_pagamento)
