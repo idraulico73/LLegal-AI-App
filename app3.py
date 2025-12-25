@@ -14,7 +14,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from fpdf import FPDF
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(page_title="Ingegneria Forense & Strategy AI (Gemini Vision)", layout="wide")
+st.set_page_config(page_title="Ingegneria Forense & Strategy AI (Gemini 16.0)", layout="wide")
 
 try:
     GENAI_KEY = st.secrets["GOOGLE_API_KEY"]
@@ -53,20 +53,19 @@ def markdown_to_docx(doc, text):
 def prepara_input_gemini(uploaded_files):
     """
     Estrae testo (PDF) e immagini (JPG/PNG) per Gemini.
-    Ritorna una lista di parti [testo, immagine, testo...]
     """
     input_parts = []
-    log_lettura = "" # Per debug utente
+    log_lettura = "" 
 
     input_parts.append("ANALIZZA I SEGUENTI DOCUMENTI DEL FASCICOLO:\n")
 
     for file in uploaded_files:
         try:
-            # GESTIONE IMMAGINI (Vision) - REINSERITA
+            # GESTIONE IMMAGINI (Vision)
             if file.type in ["image/jpeg", "image/png", "image/jpg", "image/webp"]:
                 img = PIL.Image.open(file)
                 input_parts.append(f"\n--- INIZIO IMMAGINE: {file.name} ---\n")
-                input_parts.append(img) # Passiamo l'oggetto immagine direttamente a Gemini
+                input_parts.append(img)
                 log_lettura += f"✅ Letta Immagine: {file.name}\n"
             
             # GESTIONE PDF (Testo)
@@ -91,12 +90,18 @@ def prepara_input_gemini(uploaded_files):
     return input_parts, log_lettura
 
 def interroga_gemini(prompt_sistema, contesto_chat, input_parts, modello_scelto, postura_scelta):
-    """Chiamata a Gemini Uncensored"""
+    """Chiamata a Gemini con Fallback Automatico"""
     if not HAS_KEY: return "ERRORE: API Key mancante."
 
-    model_name = "gemini-1.5-flash" if modello_scelto == "Standard" else "gemini-1.5-pro"
+    # MAPPATURA MODELLI AGGIORNATA (Usa i puntatori 'latest' che sono più sicuri)
+    if modello_scelto == "Standard":
+        primary_model = "gemini-1.5-flash-latest"
+    else:
+        primary_model = "gemini-1.5-pro-latest" # O "gemini-1.5-pro"
     
-    # SYSTEM PROMPT (IL CERVELLO)
+    fallback_model = "gemini-1.5-flash-latest" # Se il pro fallisce, usiamo questo
+
+    # SYSTEM PROMPT
     system_instruction = f"""
     SEI GEMINI, STRATEGA FORENSE SENIOR.
     
@@ -112,7 +117,7 @@ def interroga_gemini(prompt_sistema, contesto_chat, input_parts, modello_scelto,
     CONTESTO CHAT PRECEDENTE: {contesto_chat}
     """
     
-    # Configurazione Safety (TUTTO SBLOCCATO)
+    # SAFETY: Tutto sbloccato
     safety_settings = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -120,21 +125,30 @@ def interroga_gemini(prompt_sistema, contesto_chat, input_parts, modello_scelto,
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
     }
 
-    model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
-    
-    # Costruzione Messaggio Complesso (Testo + Immagini)
+    # Prompt finale
     prompt_finale = f"\n\n--- RICHIESTA UTENTE ---\n{prompt_sistema}\n\nRispondi in Italiano dettagliato (Markdown)."
-    
-    # Creiamo la lista finale dei contenuti
-    # input_parts contiene già [testo, immagini, testo...]
-    # Aggiungiamo il prompt finale in coda
     contenuto_chiamata = input_parts + [prompt_finale]
 
+    # TENTATIVO 1: MODELLO SCELTO (es. PRO)
     try:
+        model = genai.GenerativeModel(primary_model, system_instruction=system_instruction)
         response = model.generate_content(contenuto_chiamata, safety_settings=safety_settings)
         return response.text
+    
     except Exception as e:
-        return f"Errore Gemini: {e}"
+        errore = str(e)
+        # GESTIONE ERRORE 404 (Modello non trovato o API instabile)
+        if "404" in errore or "not found" in errore.lower():
+            st.warning(f"⚠️ Modello {primary_model} momentaneamente non disponibile (Errore Google). Passo al modello Backup (Flash).")
+            try:
+                # TENTATIVO 2: FALLBACK SU FLASH (Che non tradisce mai)
+                model_bk = genai.GenerativeModel(fallback_model, system_instruction=system_instruction)
+                response = model_bk.generate_content(contenuto_chiamata, safety_settings=safety_settings)
+                return response.text
+            except Exception as e2:
+                return f"Errore Totale (anche backup fallito): {e2}"
+        else:
+            return f"Errore Generico Gemini: {e}"
 
 def crea_word(testo, titolo):
     doc = Document()
@@ -173,7 +187,7 @@ with st.sidebar:
 
 # --- MAIN APP ---
 st.title("⚖️ Ingegneria Forense & Strategy AI")
-st.caption("Powered by Google Gemini 1.5 Pro (Vision + Uncensored)")
+st.caption("Powered by Google Gemini 1.5 (Vision + Uncensored + AutoFallback)")
 
 tab1, tab2, tab3 = st.tabs(["🏠 Calcolatore", "💬 Chat Strategica", "📄 Generazione Documenti"])
 
@@ -204,14 +218,12 @@ with tab2:
     uploaded_files = st.file_uploader("Trascina qui i file", accept_multiple_files=True, key="up_chat")
     
     if uploaded_files:
-        # Pre-processamento file (Testo + Immagini)
-        # Lo facciamo una volta qui per mostrare il log, ma poi lo rifaremo nelle chiamate per freschezza
         _, log_debug = prepara_input_gemini(uploaded_files)
         with st.expander("✅ Log Lettura File (Debug)", expanded=False):
             st.text(log_debug)
         
         if not st.session_state.messages:
-            st.session_state.messages.append({"role": "assistant", "content": "Ho visualizzato il fascicolo (inclusi grafici e foto). Qual è l'obiettivo?"})
+            st.session_state.messages.append({"role": "assistant", "content": "Ho visualizzato il fascicolo. Qual è l'obiettivo?"})
             
         for msg in st.session_state.messages:
             with st.chat_message(msg["role"]):
@@ -223,10 +235,10 @@ with tab2:
             with st.chat_message("user"): st.markdown(prompt)
             
             with st.chat_message("assistant"):
-                with st.spinner("Gemini Vision sta analizzando..."):
+                with st.spinner("Gemini sta analizzando..."):
                     parts_dossier, _ = prepara_input_gemini(uploaded_files)
                     
-                    # Chiamata Gemini (Premium per massima intelligenza)
+                    # Chiamata Gemini
                     risposta = interroga_gemini(prompt, st.session_state.contesto_chat_text, parts_dossier, "Premium", postura)
                     
                     st.markdown(risposta)
@@ -260,4 +272,29 @@ with tab3:
         
         if selected and (is_admin or "session_id" in st.query_params):
             if st.button("🚀 Genera Documenti"):
-                parts_dossier, _ = prepara_input
+                parts_dossier, _ = prepara_input_gemini(uploaded_files)
+                st.session_state.generated_docs = {}
+                
+                prog = st.progress(0)
+                for i, (nome, prompt_doc) in enumerate(selected):
+                    with st.status(f"Generazione {nome}...", expanded=True):
+                        txt = interroga_gemini(prompt_doc, st.session_state.contesto_chat_text, parts_dossier, livello, postura)
+                        
+                        if formato_output == "Word":
+                            buf = crea_word(txt, nome)
+                            mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            ext = "docx"
+                        else:
+                            buf = crea_pdf(txt, nome)
+                            mime = "application/pdf"
+                            ext = "pdf"
+                            
+                        st.session_state.generated_docs[nome] = {"data": buf, "name": f"{nome}.{ext}", "mime": mime}
+                    prog.progress((i+1)/len(selected))
+        
+        if st.session_state.generated_docs:
+            st.divider()
+            cols = st.columns(len(st.session_state.generated_docs))
+            for i, (k, v) in enumerate(st.session_state.generated_docs.items()):
+                with cols[i]:
+                    st.download_button(f"📥 {k}", v["data"], v["name"], v["mime"])
