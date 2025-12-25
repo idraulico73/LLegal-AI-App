@@ -1,7 +1,5 @@
 streamlit
 openai
-pypdf2
-pymupdf
 pypdf
 python-docx
 fpdf
