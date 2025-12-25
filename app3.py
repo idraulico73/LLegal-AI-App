@@ -14,7 +14,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from fpdf import FPDF
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(page_title="Ingegneria Forense & Strategy AI (V17 - Fixed)", layout="wide")
+st.set_page_config(page_title="Ingegneria Forense & Strategy AI (V18 - AutoDiscovery)", layout="wide")
 
 try:
     GENAI_KEY = st.secrets["GOOGLE_API_KEY"]
@@ -78,15 +78,18 @@ def prepara_input_gemini(uploaded_files):
             
     return input_parts, log_lettura
 
-def interroga_gemini(prompt_sistema, contesto_chat, input_parts, modello_scelto, postura_scelta):
+def interroga_gemini_resiliente(prompt_sistema, contesto_chat, input_parts, livello_scelto, postura_scelta):
+    """
+    Funzione 'ROVER' che cerca il modello funzionante.
+    """
     if not HAS_KEY: return "ERRORE: API Key mancante."
 
-    # FIX NOMI MODELLI (Uso versioni stabili senza '-latest' che causano 404)
-    if modello_scelto == "Standard":
-        primary_model = "gemini-1.5-flash"
+    # LISTE DI CANDIDATI (Dal più recente al più vecchio)
+    if livello_scelto == "Premium":
+        candidates = ["gemini-1.5-pro-latest", "gemini-1.5-pro", "gemini-1.5-pro-001", "gemini-1.5-pro-002", "gemini-pro"]
     else:
-        primary_model = "gemini-1.5-pro"
-    
+        candidates = ["gemini-1.5-flash-latest", "gemini-1.5-flash", "gemini-1.5-flash-001", "gemini-1.5-flash-002", "gemini-flash"]
+
     # SYSTEM PROMPT
     system_instruction = f"""
     SEI GEMINI, STRATEGA FORENSE SENIOR (Top 1%).
@@ -113,12 +116,26 @@ def interroga_gemini(prompt_sistema, contesto_chat, input_parts, modello_scelto,
     prompt_finale = f"\n\n--- RICHIESTA UTENTE ---\n{prompt_sistema}\n\nRispondi in Italiano dettagliato (Markdown)."
     contenuto_chiamata = input_parts + [prompt_finale]
 
-    try:
-        model = genai.GenerativeModel(primary_model, system_instruction=system_instruction)
-        response = model.generate_content(contenuto_chiamata, safety_settings=safety_settings)
-        return response.text
-    except Exception as e:
-        return f"Errore Gemini ({primary_model}): {e}"
+    # LOOP DI TENTATIVI (AUTO-DISCOVERY)
+    last_error = ""
+    for model_name in candidates:
+        try:
+            # Tenta di creare il modello e generare
+            model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
+            response = model.generate_content(contenuto_chiamata, safety_settings=safety_settings)
+            return response.text # Se arriva qui, ha funzionato!
+        except Exception as e:
+            err_str = str(e)
+            # Se è un errore 404 (Not Found) o 400 (Bad Request), prova il prossimo candidato
+            if "404" in err_str or "not found" in err_str.lower() or "400" in err_str:
+                continue 
+            else:
+                last_error = err_str
+                # Se è un altro errore (es. Quota), fermati e riportalo
+                break
+    
+    # Se usciamo dal loop senza successo:
+    return f"ERRORE IRRISOLVIBILE: Nessun modello funzionante trovato. Ultimo errore: {last_error}"
 
 def crea_word(testo, titolo):
     doc = Document()
@@ -156,12 +173,12 @@ with st.sidebar:
 
 # --- MAIN APP ---
 st.title("⚖️ Ingegneria Forense & Strategy AI")
-st.caption("Powered by Google Gemini 1.5 Pro (Vision + Uncensored)")
+st.caption("Powered by Google Gemini 1.5 Pro (Auto-Discovery Engine)")
 
 tab1, tab2, tab3 = st.tabs(["🏠 Calcolatore", "💬 Chat Strategica", "📄 Generazione Documenti"])
 
 # ==============================================================================
-# TAB 1: CALCOLATORE (AGGIORNATO PAR. 4.4)
+# TAB 1: CALCOLATORE (Rif. Par. 4.4)
 # ==============================================================================
 with tab1:
     st.header("📉 Calcolatore Deprezzamento (Rif. Par. 4.4 Perizia)")
@@ -169,11 +186,9 @@ with tab1:
     
     col1, col2 = st.columns([1, 2])
     with col1:
-        # Valore base OMI suggerito nella perizia è 1900, ma lasciamo modificabile
         valore_base = st.number_input("Valore Base (€/mq o Totale)", value=1900.0, step=100.0)
         
         st.markdown("### Coefficienti Riduttivi")
-        # Checklist esatta dal Paragrafo 4.4
         c1 = st.checkbox("Irregolarità urbanistica grave (30%)", value=True)
         c2 = st.checkbox("Superfici non abitabili/Incidenza (18%)", value=True)
         c3 = st.checkbox("Assenza mutuabilità (15%)", value=True)
@@ -184,9 +199,7 @@ with tab1:
 
     with col2:
         if btn_calcola:
-            # Formula cumulativa R = 1 - Π(1 - ri) come da perizia
             fattore_residuo = 1.0
-            
             dettaglio = []
             if c1: 
                 fattore_residuo *= (1 - 0.30)
@@ -209,14 +222,11 @@ with tab1:
             
             st.success(f"### Valore Netto Stimato: € {valore_finale:,.2f}")
             st.metric("Deprezzamento Totale Cumulato", f"- {deprezzamento_totale_perc:.2f}%")
-            
-            st.markdown("**Dettaglio applicato (Moltiplicatoria):**")
-            st.code(" * ".join(dettaglio) + f" = {(fattore_residuo):.4f} (Coeff. Residuo)")
-            
-            st.info("Nota: Questo calcolo replica la metodologia del Paragrafo 4.4 della Perizia Tecnica Estimativa Giurata (Rev. 5).")
+            st.markdown("**Dettaglio applicato:**")
+            st.code(" * ".join(dettaglio) + f" = {(fattore_residuo):.4f}")
 
 # ==============================================================================
-# TAB 2: CHAT GEMINI (VISION ENABLED)
+# TAB 2: CHAT GEMINI
 # ==============================================================================
 with tab2:
     st.write("### 1. Carica il Fascicolo")
@@ -243,7 +253,10 @@ with tab2:
             with st.chat_message("assistant"):
                 with st.spinner("Gemini sta analizzando..."):
                     parts_dossier, _ = prepara_input_gemini(uploaded_files)
-                    risposta = interroga_gemini(prompt, st.session_state.contesto_chat_text, parts_dossier, "Premium", postura)
+                    
+                    # Usa la nuova funzione resiliente
+                    risposta = interroga_gemini_resiliente(prompt, st.session_state.contesto_chat_text, parts_dossier, "Premium", postura)
+                    
                     st.markdown(risposta)
                     st.session_state.messages.append({"role": "assistant", "content": risposta})
                     st.session_state.contesto_chat_text += f"\nGemini: {risposta}"
@@ -281,7 +294,8 @@ with tab3:
                 prog = st.progress(0)
                 for i, (nome, prompt_doc) in enumerate(selected):
                     with st.status(f"Generazione {nome}...", expanded=True):
-                        txt = interroga_gemini(prompt_doc, st.session_state.contesto_chat_text, parts_dossier, livello, postura)
+                        # Usa la funzione resiliente anche qui
+                        txt = interroga_gemini_resiliente(prompt_doc, st.session_state.contesto_chat_text, parts_dossier, livello, postura)
                         
                         if formato_output == "Word":
                             buf = crea_word(txt, nome)
