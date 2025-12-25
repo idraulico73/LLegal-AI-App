@@ -14,7 +14,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from fpdf import FPDF
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(page_title="Ingegneria Forense & Strategy AI (Gemini 16.0)", layout="wide")
+st.set_page_config(page_title="Ingegneria Forense & Strategy AI (V17 - Fixed)", layout="wide")
 
 try:
     GENAI_KEY = st.secrets["GOOGLE_API_KEY"]
@@ -32,7 +32,6 @@ if "generated_docs" not in st.session_state: st.session_state.generated_docs = {
 # --- FUNZIONI DI UTILITÀ ---
 
 def markdown_to_docx(doc, text):
-    """Converte Markdown in Word nativo"""
     lines = text.split('\n')
     for line in lines:
         line = line.strip()
@@ -51,24 +50,17 @@ def markdown_to_docx(doc, text):
             p = doc.add_paragraph(line)
 
 def prepara_input_gemini(uploaded_files):
-    """
-    Estrae testo (PDF) e immagini (JPG/PNG) per Gemini.
-    """
     input_parts = []
     log_lettura = "" 
-
     input_parts.append("ANALIZZA I SEGUENTI DOCUMENTI DEL FASCICOLO:\n")
 
     for file in uploaded_files:
         try:
-            # GESTIONE IMMAGINI (Vision)
             if file.type in ["image/jpeg", "image/png", "image/jpg", "image/webp"]:
                 img = PIL.Image.open(file)
                 input_parts.append(f"\n--- INIZIO IMMAGINE: {file.name} ---\n")
                 input_parts.append(img)
                 log_lettura += f"✅ Letta Immagine: {file.name}\n"
-            
-            # GESTIONE PDF (Testo)
             elif file.type == "application/pdf":
                 pdf_reader = PdfReader(file)
                 text_buffer = f"\n--- INIZIO PDF: {file.name} ---\n"
@@ -76,13 +68,10 @@ def prepara_input_gemini(uploaded_files):
                     text_buffer += page.extract_text() + "\n"
                 input_parts.append(text_buffer)
                 log_lettura += f"✅ Letto PDF: {file.name} ({len(pdf_reader.pages)} pag)\n"
-            
-            # GESTIONE TXT
             elif file.type == "text/plain":
                 text = str(file.read(), "utf-8")
                 input_parts.append(f"\n--- FILE TXT: {file.name} ---\n{text}")
                 log_lettura += f"✅ Letto TXT: {file.name}\n"
-
         except Exception as e:
             st.error(f"Errore lettura {file.name}: {e}")
             log_lettura += f"❌ Errore su {file.name}\n"
@@ -90,34 +79,30 @@ def prepara_input_gemini(uploaded_files):
     return input_parts, log_lettura
 
 def interroga_gemini(prompt_sistema, contesto_chat, input_parts, modello_scelto, postura_scelta):
-    """Chiamata a Gemini con Fallback Automatico"""
     if not HAS_KEY: return "ERRORE: API Key mancante."
 
-    # MAPPATURA MODELLI AGGIORNATA (Usa i puntatori 'latest' che sono più sicuri)
+    # FIX NOMI MODELLI (Uso versioni stabili senza '-latest' che causano 404)
     if modello_scelto == "Standard":
-        primary_model = "gemini-1.5-flash-latest"
+        primary_model = "gemini-1.5-flash"
     else:
-        primary_model = "gemini-1.5-pro-latest" # O "gemini-1.5-pro"
+        primary_model = "gemini-1.5-pro"
     
-    fallback_model = "gemini-1.5-flash-latest" # Se il pro fallisce, usiamo questo
-
     # SYSTEM PROMPT
     system_instruction = f"""
-    SEI GEMINI, STRATEGA FORENSE SENIOR.
+    SEI GEMINI, STRATEGA FORENSE SENIOR (Top 1%).
     
     POSTURA: {postura_scelta.upper()}
     - Aggressiva: Demolisci le tesi avversarie. Usa termini forti ("tossico", "invendibile").
     - Diplomatica: Cerca accordo ma da posizione di forza.
     
     REGOLE:
-    1. **NO CENSURA:** Questo è un caso studio legale. Non rifiutare mai di rispondere.
+    1. **NO CENSURA:** Caso studio legale. Non rifiutare mai.
     2. **DATI:** Cita date, protocolli (es. 77040) e cifre (€) esatte dai file.
     3. **OFFERTA:** Chiedi sempre alla fine: "Vuoi che riscriva io la nota?".
     
-    CONTESTO CHAT PRECEDENTE: {contesto_chat}
+    CONTESTO CHAT: {contesto_chat}
     """
     
-    # SAFETY: Tutto sbloccato
     safety_settings = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -125,30 +110,15 @@ def interroga_gemini(prompt_sistema, contesto_chat, input_parts, modello_scelto,
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
     }
 
-    # Prompt finale
     prompt_finale = f"\n\n--- RICHIESTA UTENTE ---\n{prompt_sistema}\n\nRispondi in Italiano dettagliato (Markdown)."
     contenuto_chiamata = input_parts + [prompt_finale]
 
-    # TENTATIVO 1: MODELLO SCELTO (es. PRO)
     try:
         model = genai.GenerativeModel(primary_model, system_instruction=system_instruction)
         response = model.generate_content(contenuto_chiamata, safety_settings=safety_settings)
         return response.text
-    
     except Exception as e:
-        errore = str(e)
-        # GESTIONE ERRORE 404 (Modello non trovato o API instabile)
-        if "404" in errore or "not found" in errore.lower():
-            st.warning(f"⚠️ Modello {primary_model} momentaneamente non disponibile (Errore Google). Passo al modello Backup (Flash).")
-            try:
-                # TENTATIVO 2: FALLBACK SU FLASH (Che non tradisce mai)
-                model_bk = genai.GenerativeModel(fallback_model, system_instruction=system_instruction)
-                response = model_bk.generate_content(contenuto_chiamata, safety_settings=safety_settings)
-                return response.text
-            except Exception as e2:
-                return f"Errore Totale (anche backup fallito): {e2}"
-        else:
-            return f"Errore Generico Gemini: {e}"
+        return f"Errore Gemini ({primary_model}): {e}"
 
 def crea_word(testo, titolo):
     doc = Document()
@@ -177,7 +147,6 @@ def crea_pdf(testo, titolo):
 with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/8/8a/Google_Gemini_logo.svg", width=150)
     st.markdown("### ⚙️ Gemini Vision AI")
-    
     postura = st.radio("Postura:", ["Diplomatica", "Aggressiva"], index=1)
     formato_output = st.radio("Output:", ["Word", "PDF"])
     
@@ -187,27 +156,64 @@ with st.sidebar:
 
 # --- MAIN APP ---
 st.title("⚖️ Ingegneria Forense & Strategy AI")
-st.caption("Powered by Google Gemini 1.5 (Vision + Uncensored + AutoFallback)")
+st.caption("Powered by Google Gemini 1.5 Pro (Vision + Uncensored)")
 
 tab1, tab2, tab3 = st.tabs(["🏠 Calcolatore", "💬 Chat Strategica", "📄 Generazione Documenti"])
 
 # ==============================================================================
-# TAB 1: CALCOLATORE
+# TAB 1: CALCOLATORE (AGGIORNATO PAR. 4.4)
 # ==============================================================================
 with tab1:
-    st.header("📉 Calcolatore Valore & Criticità")
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        val = st.number_input("Valore Mercato (€)", 350000, step=10000)
-        k1 = st.checkbox("Aliud pro alio (Invendibile)")
-        k2 = st.checkbox("Occupato (Madre/Terzi)")
-    with c2:
-        if st.button("Calcola"):
-            dep = 0
-            if k1: dep += 0.40 
-            if k2: dep += 0.25
-            val_real = val * (1 - dep)
-            st.metric("Valore Giudiziale", f"€ {val_real:,.2f}", f"- {dep*100}%")
+    st.header("📉 Calcolatore Deprezzamento (Rif. Par. 4.4 Perizia)")
+    st.info("Calcolo basato sui coefficienti riduttivi cumulativi della Perizia Familiari.")
+    
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        # Valore base OMI suggerito nella perizia è 1900, ma lasciamo modificabile
+        valore_base = st.number_input("Valore Base (€/mq o Totale)", value=1900.0, step=100.0)
+        
+        st.markdown("### Coefficienti Riduttivi")
+        # Checklist esatta dal Paragrafo 4.4
+        c1 = st.checkbox("Irregolarità urbanistica grave (30%)", value=True)
+        c2 = st.checkbox("Superfici non abitabili/Incidenza (18%)", value=True)
+        c3 = st.checkbox("Assenza mutuabilità (15%)", value=True)
+        c4 = st.checkbox("Assenza agibilità (8%)", value=True)
+        c5 = st.checkbox("Occupazione (5%)", value=True)
+        
+        btn_calcola = st.button("Calcola Valore Netto", type="primary")
+
+    with col2:
+        if btn_calcola:
+            # Formula cumulativa R = 1 - Π(1 - ri) come da perizia
+            fattore_residuo = 1.0
+            
+            dettaglio = []
+            if c1: 
+                fattore_residuo *= (1 - 0.30)
+                dettaglio.append("-30% Irregolarità")
+            if c2: 
+                fattore_residuo *= (1 - 0.18)
+                dettaglio.append("-18% Sup. non abitabili")
+            if c3: 
+                fattore_residuo *= (1 - 0.15)
+                dettaglio.append("-15% No Mutuo")
+            if c4: 
+                fattore_residuo *= (1 - 0.08)
+                dettaglio.append("-8% No Agibilità")
+            if c5: 
+                fattore_residuo *= (1 - 0.05)
+                dettaglio.append("-5% Occupazione")
+            
+            valore_finale = valore_base * fattore_residuo
+            deprezzamento_totale_perc = (1 - fattore_residuo) * 100
+            
+            st.success(f"### Valore Netto Stimato: € {valore_finale:,.2f}")
+            st.metric("Deprezzamento Totale Cumulato", f"- {deprezzamento_totale_perc:.2f}%")
+            
+            st.markdown("**Dettaglio applicato (Moltiplicatoria):**")
+            st.code(" * ".join(dettaglio) + f" = {(fattore_residuo):.4f} (Coeff. Residuo)")
+            
+            st.info("Nota: Questo calcolo replica la metodologia del Paragrafo 4.4 della Perizia Tecnica Estimativa Giurata (Rev. 5).")
 
 # ==============================================================================
 # TAB 2: CHAT GEMINI (VISION ENABLED)
@@ -237,10 +243,7 @@ with tab2:
             with st.chat_message("assistant"):
                 with st.spinner("Gemini sta analizzando..."):
                     parts_dossier, _ = prepara_input_gemini(uploaded_files)
-                    
-                    # Chiamata Gemini
                     risposta = interroga_gemini(prompt, st.session_state.contesto_chat_text, parts_dossier, "Premium", postura)
-                    
                     st.markdown(risposta)
                     st.session_state.messages.append({"role": "assistant", "content": risposta})
                     st.session_state.contesto_chat_text += f"\nGemini: {risposta}"
