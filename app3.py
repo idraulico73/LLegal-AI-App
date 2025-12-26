@@ -361,3 +361,4 @@ with tab3:
         cols = st.columns(4)
         for i, (k,v) in enumerate(st.session_state.generated_docs.items()):
             cols[i%4].download_button(f"📥 {k}", v["data"], f"{k}.{v['ext']}", v["mime"])
+
