@@ -8,60 +8,67 @@ from docx.oxml import OxmlElement
 import io
 import re
 
-# --- CONFIGURAZIONE PAGINA ---
+# --- 1. CONFIGURAZIONE PAGINA E CSS ---
 st.set_page_config(layout="wide", page_title="GemKick Legal Strategist", page_icon="⚖️")
 
-# --- STILI CSS ---
 st.markdown("""
 <style>
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; font-weight: bold; }
     .download-desc { font-size: 0.85em; color: #666; margin-bottom: 15px; margin-top: -10px; }
     h1 { color: #2c3e50; }
     h3 { color: #34495e; }
-    .chat-message { padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; display: flex }
-    .chat-message.user { background-color: #f0f2f6 }
-    .chat-message.bot { background-color: #ffffff; border: 1px solid #e0e0e0 }
-    .status-box { padding: 10px; border-radius: 5px; margin-bottom: 10px; border-left: 5px solid; }
+    .chat-message { padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; display: flex; align-items: flex-start; gap: 10px; }
+    .chat-message.user { background-color: #f0f2f6; }
+    .chat-message.bot { background-color: #ffffff; border: 1px solid #e0e0e0; }
+    .status-box { padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 5px solid; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- INIZIALIZZAZIONE SESSION STATE ---
+# --- 2. INIZIALIZZAZIONE SESSION STATE ---
 if "chat_history" not in st.session_state: st.session_state.chat_history = []
 if "sufficiency_check" not in st.session_state: st.session_state.sufficiency_check = False
 if "ready_to_generate" not in st.session_state: st.session_state.ready_to_generate = False
 if "current_target_doc" not in st.session_state: st.session_state.current_target_doc = None
 if "question_count" not in st.session_state: st.session_state.question_count = 0
 
-# --- PROMPT LIBRARY (Il Cervello Strategico) ---
-# Qui definiamo le istruzioni specifiche per ogni tipo di documento
+# --- 3. PROMPT LIBRARY (IL CERVELLO STRATEGICO) ---
+# Istruzioni agnostiche applicabili a qualsiasi branca del diritto
 DOC_PROMPTS = {
     "Sintesi Esecutiva & Timeline": """
         TASK: Crea DUE sezioni distinte.
-        1. TIMELINE NARRATIVA (Visual Legal Design): Non un elenco di date, ma una narrazione Causa->Effetto. Evidenzia i ritardi della PA (Comune) e le omissioni del CTU.
-        2. SINTESI ESECUTIVA: Usa box per i 'Numeri Chiave' (Valore CTP vs CTU). Includi una sezione 'Decisioni da prendere oggi'.
+        1. TIMELINE NARRATIVA (Visual Legal Design): Non un elenco di date, ma una narrazione Causa -> Effetto -> Danno. Evidenzia ritardi, inadempimenti o inerzie della controparte o della PA.
+        2. SINTESI ESECUTIVA: Usa box per i 'Numeri Chiave' (Valore Richiesto vs Valore Reale). Includi una sezione 'Decisioni Urgenti'.
         TONO: Chiaro, direttivo, essenziale.
     """,
     "Matrice dei Rischi & Strategia": """
         TASK: Crea DUE sezioni distinte.
-        1. MATRICE DEI RISCHI (Quantitativa): Tabella con colonne [Scenario di Rischio | Probabilità % | Impatto Economico € | Valore Ponderato (Prob*Imp) | Mitigazione].
+        1. MATRICE DEI RISCHI (Quantitativa): Tabella con colonne [Scenario di Rischio | Probabilità % | Impatto Economico € | Valore Ponderato (Prob*Imp) | Strategia di Mitigazione].
         2. STRATEGIA PROCESSUALE (Game Theory): Usa la teoria dei giochi. Crea un 'Albero Decisionale': "Se controparte fa A -> Noi facciamo B (Aggressiva) o C (Transattiva)". Analizza Best Case e Worst Case.
     """,
     "Quesiti CTU & Replica": """
         TASK: Crea DUE sezioni distinte.
-        1. QUESITI PER IL CTU (Attacco Preventivo): Formula domande 'Binarie' (Sì/No) o a trappola logica. Costringi il CTU a smentire documenti ufficiali (es. Nota Comune) o a contraddirsi.
-        2. NOTA DI REPLICA: Smonta le tesi avversarie (es. 'sollecitare il comune dopo 30 anni') usando la tecnica della 'Reductio ad Absurdum'.
+        1. QUESITI PER IL CTU (Attacco Preventivo): Formula domande 'Binarie' (Sì/No) o a trappola logica. Costringi il tecnico a smentire documenti ufficiali o a contraddirsi.
+        2. NOTA DI REPLICA: Identifica le fallacie logiche nella tesi avversaria e smontale usando la tecnica della 'Reductio ad Absurdum'.
     """,
     "Bozza Transazione (Saldo e Stralcio)": """
-        TASK: Scrivi una BOZZA DI ACCORDO TRANSATTIVO (Golden Bridge).
-        LOGICA DEL CONGUAGLIO: 
-        - Dimostra che il valore reale dei beni assegnati al cliente (al netto dei costi di ripristino/demolizione Albano) è inferiore alla sua quota di legittima.
-        - Pertanto, il conguaglio deve essere A FAVORE del cliente o drasticamente ridotto.
-        - Fai sembrare l'accordo una 'via di fuga' per la controparte dai rischi dell'immobile abusivo.
-        STRUTTURA: Premesse (aggressive) -> Assegnazioni -> Conguaglio (giustificato matematicamente) -> Rinunce.
+        TASK: Scrivi una BOZZA DI ACCORDO TRANSATTIVO.
+        
+        LOGICA GENERALE DEL CONGUAGLIO (UNIVERSALE):
+        1. Identifica la 'Quota di Diritto' teorica del cliente (es. % ereditaria, % societaria, quota di comunione legale).
+        2. Calcola il 'Valore Nominale' dei beni/asset assegnati al cliente.
+        3. Identifica nel testo i 'Fattori di Deprezzamento' occulti (es. vizi, abusi edilizi, debiti latenti, costi di ripristino, rischi legali pendenti, illiquidità).
+        4. Sottrai questi fattori dal Valore Nominale per ottenere il 'Valore Netto Reale'.
+        
+        OBIETTIVO STRATEGICO:
+        - Dimostra che il 'Valore Netto Reale' è inferiore alla 'Quota di Diritto'.
+        - Di conseguenza, il conguaglio deve essere A FAVORE del cliente (o drasticamente ridotto se a debito).
+        - Presenta l'accordo come un 'Golden Bridge': la controparte evita di accollarsi i rischi occulti accettando le nostre condizioni.
+        
+        STRUTTURA: Premesse (aggressive sui rischi) -> Assegnazioni -> Calcolo del Conguaglio (basato sul valore reale) -> Rinunce.
     """
 }
 
-# --- SIDEBAR CONFIGURAZIONE ---
+# --- 4. SIDEBAR CONFIGURAZIONE ---
 with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/e/e3/Gavel_01.jpg/1200px-Gavel_01.jpg", width=200)
     st.title("⚙️ Configurazione Tattica")
@@ -73,22 +80,23 @@ with st.sidebar:
     
     if tone_intensity <= 3: tone_desc = "Approccio 'Soft': Toni pacati, focus sulla conciliazione."
     elif tone_intensity <= 7: tone_desc = "Approccio 'Hard': Fermezza professionale, nessun cedimento."
-    else: tone_desc = "Approccio 'Nuclear': Terminologia demolitoria ('Aliud pro alio', 'Valore zero', 'Tossico')."
+    else: tone_desc = "Approccio 'Nuclear': Terminologia demolitoria ('Tossico', 'Nullità', 'Malafede')."
     st.info(tone_desc)
 
     st.subheader("Obiettivo Primario")
     strategy_goal = st.selectbox("Seleziona Obiettivo", [
-        "Minimizzare il Conguaglio (Cavalaglio paga il meno possibile)",
-        "Ribaltare il Conguaglio (Castillo deve pagare)",
-        "Massimizzare valore quote (Per vendita a terzi)"
+        "Minimizzare il debito/conguaglio",
+        "Ribaltare la situazione (Ottenere denaro)",
+        "Massimizzare valore quote (Per vendita)",
+        "Chiudere la lite nel minor tempo possibile"
     ])
 
-    model_choice = st.selectbox("Modello AI", ["gemini-1.5-pro-latest", "gemini-1.5-flash"])
+    model_choice = st.selectbox("Modello AI", ["gemini-1.5-flash", "gemini-1.5-pro-latest"])
 
-# --- FUNZIONI CORE ---
+# --- 5. FUNZIONI UTILITY & CLEANING ---
 
 def clean_ai_response(text):
-    """Rimuove tassativamente i convenevoli dell'AI."""
+    """Rimuove tassativamente i convenevoli dell'AI (Ciao, ecco il file, ecc)."""
     patterns_start = [r"^Assolutamente.*", r"^Certo.*", r"^Ecco.*", r"^Analizzo.*", r"^In base ai.*", r"^Generato il.*", r"^Sulla base.*", r"^Per procedere.*"]
     patterns_end = [r"Spero che.*", r"Dimmi se posso.*", r"Fammi sapere.*", r"Vuoi che proceda.*", r"Resto a disposizione.*", r"Posso fare altro.*"]
     
@@ -115,7 +123,7 @@ def clean_ai_response(text):
     return "\n".join(final_lines).strip()
 
 def markdown_to_docx(content, title):
-    """Converte testo Markdown in Docx con tabelle reali."""
+    """Converte testo Markdown in Docx con tabelle native Word."""
     doc = Document()
     
     heading = doc.add_heading(title, 0)
@@ -176,38 +184,43 @@ def create_word_table(doc, table_lines):
             if j < cols:
                 cell = table.cell(i, j)
                 cell.text = cell_text.strip()
-                if i == 0:
+                if i == 0: # Intestazione Bold
                     for paragraph in cell.paragraphs:
                         for run in paragraph.runs:
                             run.font.bold = True
 
+# --- 6. AGENTI AI (SUPERVISORE & GENERATORE) ---
+
 def check_sufficiency_and_ask(context, doc_type, conversation_history):
     """
-    IL SUPERVISORE AI: Analizza se mancano dati critici.
+    AGENTE SUPERVISORE:
+    Valuta se i dati sono sufficienti.
+    Output: "READY" oppure "ASK: <domanda>"
     """
     if not api_key: return "ERROR", "Manca API Key"
     
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash") # Veloce per il check
+    # Usiamo Flash per velocità nell'interazione
+    model = genai.GenerativeModel("gemini-1.5-flash") 
     
     history_txt = "\n".join([f"{role}: {msg}" for role, msg in conversation_history])
     
     prompt = f"""
     SEI UN SUPERVISORE LEGALE SENIOR.
-    Il tuo compito NON è generare il documento, ma decidere se abbiamo abbastanza informazioni per generarlo.
+    Non devi generare il documento, ma decidere se abbiamo abbastanza informazioni per scriverlo.
     
     Documento Richiesto: {doc_type}
-    Contesto Documentale Fornito:
+    Contesto Attuale:
     {context}
     
     Storico Conversazione:
     {history_txt}
     
     ISTRUZIONI:
-    1. Analizza se nel contesto ci sono i dati essenziali per {doc_type}.
-    2. Se mancano dati CRITICI (es. valori beni, date chiave, controparti), formula UNA sola domanda specifica.
-    3. Se le info sono sufficienti, rispondi SOLO "READY".
-    4. Sii pragmatico. Non fare domande di rito. Massimo 1 domanda alla volta.
+    1. Analizza se ci sono i dati essenziali (nomi, date, valori, controparti) per {doc_type}.
+    2. Se mancano dati CRITICI per la strategia, formula UNA sola domanda specifica.
+    3. Se le info sono sufficienti (o se siamo bloccati), rispondi SOLO "READY".
+    4. Sii pragmatico: massimo 1 domanda alla volta.
     
     Rispondi SOLO con la domanda O con "READY".
     """
@@ -218,20 +231,23 @@ def check_sufficiency_and_ask(context, doc_type, conversation_history):
         if "READY" in text.upper(): return "READY", ""
         else: return "ASK", text
     except Exception as e:
-        return "READY", "" # Fallback in caso di errore API, proviamo a generare comunque
+        return "READY", "" # Fallback in caso di errore
 
 def generate_final_document(doc_type, context, posture, goal, conversation_history):
-    """Generazione finale con prompt engineering avanzato."""
+    """
+    AGENTE REDATTORE:
+    Genera il documento finale formattato e strategico.
+    """
     if not api_key: return "Manca API Key"
     
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(model_choice)
     
+    # Integra chat history nel contesto
     chat_context = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in conversation_history if msg['role'] == 'user'])
-    full_context = context + "\n\nINFORMAZIONI INTEGRATIVE UTENTE:\n" + chat_context
+    full_context = context + "\n\nDATI INTEGRATIVI DALL'UTENTE:\n" + chat_context
     
-    # Recupera l'istruzione specifica dal dizionario
-    specific_instruction = DOC_PROMPTS.get(doc_type, "Genera un documento professionale.")
+    specific_instruction = DOC_PROMPTS.get(doc_type, "Genera un documento legale professionale.")
     
     system_prompt = f"""
     SEI GEMINI, STRATEGA FORENSE SENIOR (Top 1% Italia).
@@ -239,20 +255,21 @@ def generate_final_document(doc_type, context, posture, goal, conversation_histo
     POSTURA: Livello Aggressività {posture}/10. 
     OBIETTIVO: {goal}.
     
-    REGOLE DI SCRITTURA (NO CHAT):
+    REGOLE DI FORMATTAZIONE (TASSATIVE):
     1. NON INSERIRE SALUTI, PREMESSE O CONCLUSIONI.
     2. INIZIA DIRETTAMENTE CON IL TITOLO DEL DOCUMENTO.
     3. USA MARKDOWN per formattare (**grassetto**, # titoli).
-    4. USA TABELLE MARKDOWN (| A | B |) per i dati numerici.
+    4. USA TABELLE MARKDOWN (| A | B |) per tutti i dati numerici e matrici.
     
-    REGOLE LOGICHE:
-    - Se l'obiettivo è ribaltare il conguaglio, usa i valori 'deprezzati' per dimostrare che il cliente riceve meno del dovuto.
-    - Se aggressività > 7, usa linguaggio perentorio ("Inaccettabile", "Viziato", "Nullo").
+    REGOLE DI STILE:
+    - Se Aggressività > 7: Usa termini come "Inaccettabile", "Viziato", "Pretestuoso", "Grave nocumento".
+    - Se Aggressività < 4: Usa termini come "Criticità", "Da rivedere", "Auspicabile accordo".
+    - Quando citi valori, distingui sempre tra "Valore Nominale" (teorico) e "Valore Reale" (di realizzo).
     
-    ISTRUZIONI SPECIFICHE PER QUESTO DOCUMENTO:
+    ISTRUZIONI SPECIFICHE PER IL DOCUMENTO '{doc_type}':
     {specific_instruction}
     
-    TASK: Genera il documento completo basandoti sul contesto.
+    TASK: Genera il documento completo, pronto per l'uso professionale.
     """
     
     try:
@@ -261,20 +278,21 @@ def generate_final_document(doc_type, context, posture, goal, conversation_histo
     except Exception as e:
         return f"Errore durante la generazione: {str(e)}"
 
-# --- INTERFACCIA PRINCIPALE ---
-st.title("⚖️ GemKick: Legal Strategy Suite (Rev. 29)")
-st.markdown("### Generatore Legale con Intervista Dinamica & Strategia Mirata")
+# --- 7. INTERFACCIA UTENTE PRINCIPALE ---
+st.title("⚖️ GemKick: Legal Strategy Suite")
+st.markdown("### Generatore Legale Agnostico con Intervista Dinamica")
 
 # 1. INPUT CONTESTO
-uploaded_context = st.text_area("1. Incolla qui il contenuto dei documenti:", height=150, placeholder="Es: Testo estratto da PDF, note avvocati, perizie...")
+uploaded_context = st.text_area("1. Incolla qui il contenuto dei documenti (Testo estratto):", height=150, placeholder="Es: Testo di perizie, atti giudiziari, contratti, bilanci...")
 
 # 2. SELEZIONE DOCUMENTO
 doc_options = ["Seleziona..."] + list(DOC_PROMPTS.keys())
 target_doc = st.selectbox("2. Che documento vuoi generare?", doc_options)
 
-# LOGICA DI CONTROLLO STATO
+# LOGICA DEL FLUSSO
 if uploaded_context and target_doc != "Seleziona...":
-    # Reset se cambio documento
+    
+    # Reset stato se cambia il documento target
     if st.session_state.current_target_doc != target_doc:
         st.session_state.current_target_doc = target_doc
         st.session_state.chat_history = []
@@ -282,91 +300,96 @@ if uploaded_context and target_doc != "Seleziona...":
         st.session_state.sufficiency_check = False
         st.session_state.question_count = 0
 
-    # Bottone di avvio analisi
+    # A. BOTTONE DI ANALISI INIZIALE
     if not st.session_state.sufficiency_check:
         if st.button("🚀 Avvia Analisi Preliminare"):
-            status, msg = check_sufficiency_and_ask(uploaded_context, target_doc, [])
-            if status == "READY":
-                st.session_state.ready_to_generate = True
-                st.success("✅ Informazioni sufficienti! Pronto a generare.")
-            else:
-                st.session_state.chat_history.append({"role": "assistant", "content": msg})
-                st.session_state.question_count += 1
-            st.session_state.sufficiency_check = True
-            st.rerun()
+            with st.spinner("Analisi del contesto in corso..."):
+                status, msg = check_sufficiency_and_ask(uploaded_context, target_doc, [])
+                if status == "READY":
+                    st.session_state.ready_to_generate = True
+                    st.success("✅ Informazioni sufficienti! Pronto a generare.")
+                else:
+                    st.session_state.chat_history.append({"role": "assistant", "content": msg})
+                    st.session_state.question_count += 1
+                st.session_state.sufficiency_check = True
+                st.rerun()
 
-    # INTERFACCIA CHAT (INTERVISTA DINAMICA)
+    # B. INTERFACCIA CHAT (LOOP DI SUPERVISIONE)
     if st.session_state.sufficiency_check and not st.session_state.ready_to_generate:
+        
+        # Display stato
+        color = "#e8f4f8"
         st.markdown(f"""
-        <div class="status-box" style="background-color: #e8f4f8; border-color: #00a8cc;">
-            <b>🤖 Assistente Strategico:</b> Sto analizzando il caso per preparare: <i>{target_doc}</i>.<br>
-            Domanda {st.session_state.question_count}/10 per affinare la strategia.
+        <div class='status-box' style='background-color: {color}; border-color: #00a8cc;'>
+            <b>🤖 Assistente Strategico:</b> Sto analizzando i dati per: <i>{target_doc}</i>.<br>
+            Domanda {st.session_state.question_count}/10 per perfezionare la strategia.
         </div>
         """, unsafe_allow_html=True)
         
-        # Mostra storico
+        # Display cronologia
         for msg in st.session_state.chat_history:
-            role_class = "user" if msg["role"] == "user" else "bot"
+            role_cls = "user" if msg["role"] == "user" else "bot"
             icon = "👤" if msg["role"] == "user" else "🤖"
-            st.markdown(f"<div class='chat-message {role_class}'><b>{icon}:</b>&nbsp;{msg['content']}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='chat-message {role_cls}'><b>{icon}:</b> {msg['content']}</div>", unsafe_allow_html=True)
         
-        # Input utente
-        user_input = st.chat_input("Rispondi qui (o scrivi 'Basta' per generare)...")
+        # Input
+        user_input = st.chat_input("Rispondi qui (o scrivi 'Salta' per forzare la generazione)...")
         
         if user_input:
-            if user_input.lower() in ["basta", "stop", "salta", "fine"]:
+            # Gestione comandi di uscita
+            if user_input.lower() in ["salta", "basta", "stop", "fine", "genera"]:
                 st.session_state.ready_to_generate = True
                 st.rerun()
             
             st.session_state.chat_history.append({"role": "user", "content": user_input})
             
-            # Controllo soglia domande (Max 10)
+            # Limite massimo 10 domande
             if st.session_state.question_count >= 10:
+                st.warning("⚠️ Raggiunto limite massimo interazioni. Procedo con la generazione.")
                 st.session_state.ready_to_generate = True
-                st.warning("⚠️ Raggiunto limite massimo domande. Procedo con le info disponibili.")
                 st.rerun()
             
-            # Nuova verifica sufficienza
+            # Nuova verifica col Supervisore
             status, next_msg = check_sufficiency_and_ask(uploaded_context, target_doc, [(m['role'], m['content']) for m in st.session_state.chat_history])
             
             if status == "READY":
                 st.session_state.ready_to_generate = True
-                st.success("✅ Ottimo! Ora ho tutto il necessario.")
+                st.success("✅ Ottimo! Ho tutto il necessario.")
                 st.rerun()
             else:
                 st.session_state.chat_history.append({"role": "assistant", "content": next_msg})
                 st.session_state.question_count += 1
                 st.rerun()
-        
-        # Bottone di fuga (Force Generate)
+
+        # Bottone di fuga manuale
         if st.button("⏩ Salta domande e Genera Subito"):
             st.session_state.ready_to_generate = True
             st.rerun()
 
-    # 3. GENERAZIONE FINALE
+    # C. GENERAZIONE FINALE
     if st.session_state.ready_to_generate:
         st.markdown("---")
-        st.subheader(f"📄 Generazione: {target_doc}")
+        st.subheader(f"📄 Generazione Documento: {target_doc}")
         
-        if st.button("⚡ Genera Documento Finale"):
+        if st.button("⚡ Genera Documento Definitivo"):
             with st.spinner("Elaborazione Strategica in corso (Game Theory & Visual Design)..."):
                 final_content = generate_final_document(target_doc, uploaded_context, tone_intensity, strategy_goal, st.session_state.chat_history)
                 
-                # Creazione file Word
+                # Creazione DOCX
                 docx_file = markdown_to_docx(final_content, target_doc)
-                
                 st.session_state['final_docx'] = docx_file
-                st.success("Documento Generato!")
+                st.success("Documento Generato con Successo!")
 
         if 'final_docx' in st.session_state:
+            safe_filename = target_doc.replace(' ', '_').replace('&', 'e')
             st.download_button(
                 label="📥 SCARICA DOCUMENTO WORD (.docx)",
                 data=st.session_state['final_docx'],
-                file_name=f"{target_doc.replace(' ', '_')}_Final.docx",
+                file_name=f"{safe_filename}_GemKick.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
-            st.caption("Il file include tabelle formattate, calcoli corretti e strategia legale ottimizzata.")
+            st.caption("Il file include tabelle formattate, calcoli corretti e logica 'Net Value'.")
 
 else:
     if not uploaded_context:
-        st.info("👋 Inizia incollando il testo dei documenti nel box sopra.")
+        st.info("👋 Benvenuto. Incolla il testo dei documenti nel box sopra per iniziare.")
