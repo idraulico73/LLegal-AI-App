@@ -4,6 +4,7 @@ from io import BytesIO
 import time
 import re
 import PIL.Image
+import zipfile
 
 # --- LIBRERIE ESTERNE ---
 import google.generativeai as genai
@@ -12,33 +13,36 @@ from docx import Document
 from docx.shared import Pt, RGBColor
 from fpdf import FPDF
 
-# --- CONFIGURAZIONE APP & CSS ---
+# --- CONFIGURAZIONE APP ---
 APP_NAME = "LexVantage"
-APP_VER = "Rev 37 (Brainstorming Implemented & Doc Sanitizer)"
+APP_VER = "Rev 40 (Marker Sanitizer & Logic Fix)"
 
 st.set_page_config(page_title=f"{APP_NAME} AI", layout="wide", page_icon="⚖️")
 
-# CSS per layout sicuro e tabelle
+# CSS: Nascondiamo elementi di disturbo e fissiamo layout
 st.markdown("""
 <style>
     .stMarkdown { overflow-x: auto; }
     div[data-testid="stChatMessage"] { overflow-x: hidden; }
     h1, h2, h3 { color: #2c3e50; }
-    .stButton>button { width: 100%; border-radius: 5px; height: 3em; }
+    .stButton>button { width: 100%; border-radius: 5px; height: 3em; font-weight: bold; }
+    /* Evidenziazione box intervista */
+    div[data-testid="stChatMessage"] { background-color: #f9f9f9; border-radius: 10px; padding: 10px; margin-bottom: 5px;}
 </style>
 """, unsafe_allow_html=True)
 
-# --- MEMORIA DI SESSIONE ---
+# --- STATE MANAGEMENT ---
 if "messages" not in st.session_state: st.session_state.messages = []
 if "contesto_chat_text" not in st.session_state: st.session_state.contesto_chat_text = ""
 if "generated_docs" not in st.session_state: st.session_state.generated_docs = {} 
 if "dati_calcolatore" not in st.session_state: st.session_state.dati_calcolatore = "Nessun calcolo tecnico effettuato."
 if "livello_aggressivita" not in st.session_state: st.session_state.livello_aggressivita = 5
 if "intervista_fatta" not in st.session_state: st.session_state.intervista_fatta = False
+if "nome_cliente" not in st.session_state: st.session_state.nome_cliente = "Cliente"
 
-# --- MOTORE AI ---
+# --- AI SETUP ---
 active_model = None
-status_text = "Inizializzazione..."
+status_text = "Init..."
 status_color = "off"
 HAS_KEY = False
 
@@ -51,62 +55,63 @@ try:
             list_models = genai.list_models()
             all_models = [m.name for m in list_models if 'generateContent' in m.supported_generation_methods]
         except: all_models = []
-
-        priority_list = ["models/gemini-1.5-pro-latest", "models/gemini-1.5-pro", "models/gemini-1.5-flash"]
-        for candidate in priority_list:
-            if candidate in all_models:
-                active_model = candidate
+        
+        # Priorità modello
+        priority = ["models/gemini-1.5-pro-latest", "models/gemini-1.5-pro", "models/gemini-1.5-flash"]
+        for cand in priority:
+            if cand in all_models:
+                active_model = cand
                 break
         if not active_model and all_models: active_model = all_models[0]
-            
+        
         if active_model:
-            status_text = f"Online: {active_model.replace('models/', '')}"
+            status_text = f"Ready: {active_model.replace('models/', '')}"
             status_color = "green"
         else:
-            status_text = "Errore: Nessun modello trovato."
+            status_text = "No Models Found"
             status_color = "red"
-    else:
-        status_text = "Manca API KEY."
-        status_color = "red"
 except Exception as e:
-    status_text = f"Errore: {str(e)}"
+    status_text = f"Error: {e}"
     status_color = "red"
 
-# --- FUNZIONI DI UTILITÀ & SANITIZZAZIONE ---
+# --- CORE FUNCTIONS ---
 
-def rimuovi_tabelle_forzato(text):
-    """Chat Mode: Distrugge le tabelle per evitare bug grafici."""
-    if not text: return ""
-    return text.replace("|", " - ")
+def detect_client_name(text):
+    """Cerca cognome cliente nel testo fascicolo."""
+    match = re.search(r"(?:sig\.|signor|cliente)\s+([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)", text, re.IGNORECASE)
+    if match: return match.group(1).replace(" ", "_")
+    return "Cliente"
 
-def sterilizza_documento_ai(text):
+def sterilizza_chat(text):
+    """Chat Mode: Toglie tabelle."""
+    return text.replace("|", " - ") if text else ""
+
+def sterilizza_doc_marker(text):
     """
-    Doc Mode: RIMUOVE PREAMBOLI E DOMANDE FINALI.
-    Elimina 'Perfetto', 'Ecco', 'Certo' e domande tipo 'Vuoi procedere?'.
+    DOC MODE (INFALLIBILE):
+    Cerca il marker ###START_DOC###.
+    Tutto quello che c'è prima viene cancellato.
+    Tutto quello che c'è dopo (domande finali) viene pulito via regex.
     """
     if not text: return ""
     
-    # 1. Rimuove preamboli comuni (Case Insensitive)
-    patterns_start = [
-        r"^Perfetto.*?\n", r"^Certo.*?\n", r"^Assolutamente.*?\n", 
-        r"^Ecco.*?\n", r"^Ok, .*?\n", r"^Capito.*?\n", 
-        r"^Sure.*?\n", r"^Here.*?\n"
-    ]
-    for p in patterns_start:
-        text = re.sub(p, "", text, flags=re.IGNORECASE | re.MULTILINE)
+    # 1. MARKER CUT
+    if "###START_DOC###" in text:
+        text = text.split("###START_DOC###")[1].strip()
+    else:
+        # Fallback se l'AI sbaglia marker (raro ma possibile, usiamo regex vecchia)
+        kill_list = [r"^Assolutamente.*?\n", r"^Ecco.*?\n", r"^Perfetto.*?\n", r"^Certo.*?\n"]
+        for p in kill_list: text = re.sub(p, "", text, count=1, flags=re.IGNORECASE|re.DOTALL)
 
-    # 2. Rimuove domande finali o saluti di servizio
-    patterns_end = [
-        r"Vuoi che proceda.*?$", r"Fammi sapere.*?$", r"Spero che.*?$", 
-        r"Resto a disposizione.*?$", r"Dimmi se.*?$"
-    ]
+    # 2. END CUT (Domande finali)
+    patterns_end = [r"Vuoi che proceda.*?$", r"Fammi sapere.*?$", r"Resto a disposizione.*?$"]
     for p in patterns_end:
-        text = re.sub(p, "", text, flags=re.IGNORECASE | re.MULTILINE)
+        text = re.sub(p, "", text, flags=re.IGNORECASE|re.MULTILINE)
         
     return text.strip()
 
 def advanced_markdown_to_docx(doc, text):
-    """Parser DOCX con supporto Tabelle Reali."""
+    """Engine Tabelle DOCX."""
     lines = text.split('\n')
     iterator = iter(lines)
     in_table = False
@@ -114,18 +119,15 @@ def advanced_markdown_to_docx(doc, text):
 
     for line in iterator:
         stripped = line.strip()
-        # Rileva tabella
         if "|" in stripped and len(stripped) > 2 and stripped.startswith("|") and stripped.endswith("|"):
             if not in_table:
                 in_table = True
                 table_data = []
             cells = [c.strip() for c in stripped.split('|')[1:-1]]
-            # Salta righe di separazione markdown (es. ---|---)
             if all(set(c).issubset({'-', ':'}) for c in cells if c): continue
             table_data.append(cells)
             continue
         
-        # Fine tabella -> Renderizza
         if in_table:
             if table_data:
                 rows = len(table_data)
@@ -141,8 +143,6 @@ def advanced_markdown_to_docx(doc, text):
             table_data = []
 
         if not stripped: continue
-        
-        # Titoli e Liste
         if stripped.startswith('#'):
             level = stripped.count('#')
             doc.add_heading(stripped.lstrip('#').strip(), level=min(level, 3))
@@ -151,214 +151,259 @@ def advanced_markdown_to_docx(doc, text):
         else:
             doc.add_paragraph(stripped)
 
-def prepara_input_gemini(uploaded_files):
-    input_parts = []
-    input_parts.append("ANALISI FASCICOLO TECNICO/LEGALE:\n")
-    log_debug = ""
+def get_file_content(uploaded_files):
+    """Estrae testo e metadati dai file."""
+    parts = []
+    log = ""
+    full_text = ""
+    parts.append("FASCICOLO:\n")
+    
+    if not uploaded_files: return [], "", ""
+
     for file in uploaded_files:
         try:
-            safe_name = file.name.replace("|", "_")
+            safe = file.name.replace("|", "_")
             if file.type == "application/pdf":
                 pdf = PdfReader(file)
-                text = ""
-                for page in pdf.pages: text += page.extract_text().replace("|", " ") + "\n"
-                input_parts.append(f"\n--- PDF: {safe_name} ---\n{text}")
-                log_debug += f"📄 {safe_name}\n"
+                txt = ""
+                for p in pdf.pages: txt += p.extract_text().replace("|", " ") + "\n"
+                parts.append(f"\n--- PDF: {safe} ---\n{txt}")
+                full_text += txt
+                log += f"PDF: {safe}\n"
             elif "word" in file.type:
-                 doc = Document(file)
-                 text = "\n".join([p.text for p in doc.paragraphs])
-                 input_parts.append(f"\n--- DOCX: {safe_name} ---\n{text}")
-                 log_debug += f"📘 {safe_name}\n"
+                doc = Document(file)
+                txt = "\n".join([p.text for p in doc.paragraphs])
+                parts.append(f"\n--- DOCX: {safe} ---\n{txt}")
+                full_text += txt
+                log += f"DOCX: {safe}\n"
             elif "image" in file.type:
                 img = PIL.Image.open(file)
-                input_parts.append(f"\n--- IMG: {safe_name} ---\n")
-                input_parts.append(img)
-                log_debug += f"🖼️ {safe_name}\n"
-        except Exception as e:
-            st.error(f"Errore {file.name}: {e}")
-    return input_parts, log_debug
+                parts.append(f"\n--- IMG: {safe} ---\n")
+                parts.append(img)
+                log += f"IMG: {safe}\n"
+        except: log += f"ERR: {file.name}\n"
+        
+    return parts, log, full_text
 
-def interroga_gemini(prompt, contesto, input_parts, modello, aggressivita, is_chat=True, force_interview=False):
-    if not HAS_KEY or not modello: return "ERRORE: AI Offline."
-    dati_calc = st.session_state.dati_calcolatore
+def interroga_gemini(prompt, contesto, input_parts, aggressivita, is_chat=True, force_interview=False):
+    if not HAS_KEY: return "AI Offline."
     
-    mood_map = {1: "Diplomatico", 5: "Fermo/Tecnico", 10: "Guerra Legale (Aggressivo)"}
+    # Mood Setting
+    mood_map = {1: "Diplomatico", 5: "Tecnico/Fermo", 10: "Aggressivo (Warfare)"}
     mood = mood_map.get(aggressivita, "Fermo")
     if aggressivita < 4: mood = "Diplomatico"
-    elif aggressivita > 7: mood = "Aggressivo (Warfare)"
-
-    # Regole rigide per evitare output colloquiali
-    doc_rules = """
-    REGOLA RIGIDA DOCUMENTI:
-    1. NON INIZIARE MAI con "Ecco...", "Certo...", "Perfetto...". Inizia SUBITO col Titolo.
-    2. NON FARE DOMANDE alla fine. Il documento deve essere finito e pronto per la firma/invio.
-    3. USA TABELLE per i dati numerici.
-    4. Cita i documenti con acronimi (es. [Doc. Perizia]).
-    """
+    if aggressivita > 7: mood = "Aggressivo"
     
-    chat_rules = "USA ELENCHI PUNTATI. NIENTE TABELLE."
+    # Prompt Engineering "The Marker"
+    doc_rules = """
+    REGOLA CRUCIALE DOCUMENTI:
+    1. DEVI INIZIARE IL DOCUMENTO ESATTAMENTE CON LA STRINGA: ###START_DOC###
+    2. SUBITO DOPO IL MARKER, SCRIVI IL TITOLO.
+    3. TUTTO CIÒ CHE SCRIVI PRIMA DEL MARKER VERRÀ CANCELLATO.
+    4. USA TABELLE per dati numerici.
+    5. NIENTE DOMANDE FINALI.
+    """
+    chat_rules = "USA ELENCHI PUNTATI. NO TABELLE."
 
     if force_interview:
-        prompt_final = f"L'utente ha chiesto: '{prompt}'. IGNORA. Fai invece 3 domande strategiche cruciali per capire budget e obiettivi. Rispondi SOLO con le domande."
+        final_prompt = f"UTENTE: '{prompt}'. IGNORA LA DOMANDA. Fai 3 domande strategiche (Budget, Tempi, Obiettivi) per calibrare. Rispondi SOLO con le domande."
     else:
-        prompt_final = prompt
+        final_prompt = prompt
 
-    sys_instr = f"""
-    SEI {APP_NAME}, STRATEGA FORENSE. MOOD: {mood}.
-    DATI CALCOLATORE: {dati_calc}
-    CONTESTO: {contesto}
+    sys = f"""
+    SEI {APP_NAME}. MOOD: {mood}.
+    DATI CALCOLATORE: {st.session_state.dati_calcolatore}
+    STORICO: {contesto}
     {chat_rules if is_chat else doc_rules}
     """
     
     payload = list(input_parts)
-    payload.append(prompt_final)
-
+    payload.append(final_prompt)
+    
     try:
-        model = genai.GenerativeModel(modello, system_instruction=sys_instr)
-        return model.generate_content(payload).text
-    except Exception as e: return f"Errore API: {e}"
+        m = genai.GenerativeModel(active_model, system_instruction=sys)
+        return m.generate_content(payload).text
+    except Exception as e: return f"Error: {e}"
 
-def crea_word(testo, titolo):
-    testo = sterilizza_documento_ai(testo) # Nuova funzione killer
-    doc = Document()
-    doc.add_heading(titolo, 0)
-    advanced_markdown_to_docx(doc, testo)
-    buffer = BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
-    return buffer
+def crea_output_file(testo, nome, formato):
+    testo = sterilizza_doc_marker(testo) # MARKER CUT
+    
+    if formato == "Word":
+        doc = Document()
+        doc.add_heading(nome, 0)
+        advanced_markdown_to_docx(doc, testo)
+        buf = BytesIO()
+        doc.save(buf)
+        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ext = "docx"
+    else:
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+        safe_title = nome.encode('latin-1','replace').decode('latin-1')
+        pdf.cell(0, 10, txt=safe_title, ln=1, align='C')
+        safe_text = testo.replace("€", "EUR").encode('latin-1','replace').decode('latin-1')
+        pdf.multi_cell(0, 10, txt=safe_text)
+        buf = BytesIO()
+        buf.write(pdf.output(dest='S').encode('latin-1'))
+        mime = "application/pdf"
+        ext = "pdf"
+        
+    buf.seek(0)
+    return buf, mime, ext
 
-def crea_pdf_safe(testo, titolo):
-    testo = sterilizza_documento_ai(testo)
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    pdf.cell(0, 10, txt=titolo.encode('latin-1','replace').decode('latin-1'), ln=1, align='C')
-    replacements = {"€": "EUR", "’": "'", "“": '"', "”": '"'}
-    for k,v in replacements.items(): testo = testo.replace(k,v)
-    pdf.multi_cell(0, 10, txt=testo.encode('latin-1','replace').decode('latin-1'))
-    buffer = BytesIO()
-    buffer.write(pdf.output(dest='S').encode('latin-1'))
-    buffer.seek(0)
-    return buffer
+def crea_zip(docs):
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, info in docs.items():
+            # Nome File: Tipo_Cliente_Data.ext
+            cli = st.session_state.nome_cliente
+            ts = datetime.now().strftime("%Y%m%d")
+            fname = f"{n}_{cli}_{ts}.{info['ext']}"
+            z.writestr(fname, info['data'].getvalue())
+    buf.seek(0)
+    return buf
 
-# --- SIDEBAR & MAIN ---
+# --- UI SIDEBAR ---
 with st.sidebar:
     st.title(APP_NAME)
     st.caption(APP_VER)
-    if status_color == "green": st.success(status_text)
+    if status_color=="green": st.success(status_text)
     else: st.error(status_text)
     st.divider()
     st.session_state.livello_aggressivita = st.slider("Aggressività", 1, 10, 5)
-    if st.button("Reset"):
+    st.session_state.nome_cliente = st.text_input("Cliente", st.session_state.nome_cliente)
+    if st.button("RESET"):
         st.session_state.clear()
         st.rerun()
 
-tab1, tab2, tab3 = st.tabs(["🧮 Calcolatore", "💬 Chat", "📄 Documenti (Brainstorming Applied)"])
+# --- MAIN TABS ---
+t1, t2, t3 = st.tabs(["🧮 Calc", "💬 Chat", "📦 Docs"])
 
-# TAB 1
-with tab1:
-    st.header("Calcolatore")
-    base = st.number_input("Base CTU (€)", value=354750.0)
-    c1, c2, c3 = st.columns(3)
-    with c1: chk_abuso = st.checkbox("Abuso Grave (-30%)", True)
-    with c2: chk_sup = st.checkbox("Non Abitabile (-18%)", True)
-    with c3: chk_mutuo = st.checkbox("No Mutuo (-15%)", True)
+# TAB 1: CALCOLATORE
+with t1:
+    st.header("Calcolatore Tecnico")
+    base = st.number_input("Valore Base CTU (€)", value=354750.0)
+    c1,c2,c3 = st.columns(3)
+    with c1: chk_a = st.checkbox("Abuso (-30%)", True)
+    with c2: chk_b = st.checkbox("No Abitabile (-18%)", True)
+    with c3: chk_c = st.checkbox("No Mutuo (-15%)", True)
+    
     if st.button("Calcola"):
-        f = 1.0 * (0.7 if chk_abuso else 1) * (0.82 if chk_sup else 1) * (0.85 if chk_mutuo else 1)
-        res = base * f
-        st.session_state.dati_calcolatore = f"VALORE BASE: {base} -> FINALE: {res:.2f} (Fattore {f:.3f})"
-        st.success("Salvato.")
-    if st.session_state.dati_calcolatore: st.code(st.session_state.dati_calcolatore)
+        f = 1.0 * (0.7 if chk_a else 1) * (0.82 if chk_b else 1) * (0.85 if chk_c else 1)
+        fin = base * f
+        st.session_state.dati_calcolatore = f"BASE: {base} -> TARGET: {fin:.2f} (Fattore {f:.3f})"
+        st.success(f"Salvato. Target: € {fin:,.2f}")
 
-# TAB 2
-with tab2:
-    files = st.file_uploader("Fascicolo", accept_multiple_files=True, key="up_chat")
+# TAB 2: CHAT (LOGIC FIX)
+with t2:
+    files = st.file_uploader("Fascicolo", accept_multiple_files=True, key="up")
+    
+    # 1. INIT: Lettura Files e Rilevamento Nome
+    parts, log, full_txt = get_file_content(files)
+    if full_txt and st.session_state.nome_cliente == "Cliente":
+        st.session_state.nome_cliente = detect_client_name(full_txt[:2000])
+        
+    # 2. RENDER STORICO
     if not st.session_state.messages:
-        msg = "Carica i documenti." if not files else "Documenti letti. Analizzo..."
-        st.session_state.messages.append({"role": "assistant", "content": msg})
-
+        msg = "Carica i documenti." if not files else "Pronto."
+        st.session_state.messages.append({"role":"assistant", "content":msg})
+        
     for m in st.session_state.messages:
         with st.chat_message(m["role"]):
-            st.markdown(rimuovi_tabelle_forzato(m["content"]) if m["role"]=="assistant" else m["content"])
+            st.markdown(sterilizza_chat(m["content"]) if m["role"]=="assistant" else m["content"])
 
-    if prompt := st.chat_input("..."):
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        st.session_state.contesto_chat_text += f"\nUser: {prompt}"
-        with st.chat_message("user"): st.markdown(prompt)
-        
+    # 3. LOGICA INTERVISTA (PRIMA DELL'INPUT)
+    # Se l'utente ha appena parlato e serve intervista, la generiamo ORA e facciamo Rerun.
+    # Così l'input box non appare nel ciclo sbagliato.
+    last_role = st.session_state.messages[-1]["role"] if st.session_state.messages else "assistant"
+    
+    if files and not st.session_state.intervista_fatta and len(st.session_state.messages) < 6 and last_role == "user":
+        # È il momento dell'intervista!
         with st.chat_message("assistant"):
+            with st.spinner("Analisi Strategica Iniziale..."):
+                q_prompt = st.session_state.messages[-1]["content"] # Prendi l'ultima domanda utente
+                resp = interroga_gemini(q_prompt, st.session_state.contesto_chat_text, parts, st.session_state.livello_aggressivita, True, True)
+                
+                clean = sterilizza_chat(resp)
+                st.markdown(clean)
+                st.session_state.messages.append({"role":"assistant", "content":clean})
+                st.session_state.contesto_chat_text += f"\nAI: {clean}"
+                st.session_state.intervista_fatta = True
+                time.sleep(0.5) # Piccolo delay per UX
+                st.rerun() # RIAVVIA PER MOSTRARE LA NUOVA STORIA E SPOSTARE L'INPUT SOTTO
+
+    # 4. INPUT (Viene mostrato solo se non stiamo facendo il rerun sopra)
+    if prompt := st.chat_input("Scrivi..."):
+        st.session_state.messages.append({"role":"user", "content":prompt})
+        st.session_state.contesto_chat_text += f"\nUser: {prompt}"
+        st.rerun() # Rerun per mostrare il messaggio utente e triggerare la risposta AI nel prossimo ciclo
+
+    # 5. RISPOSTA STANDARD (Se l'ultimo è user e non serve intervista)
+    if last_role == "user" and (st.session_state.intervista_fatta or not files):
+         with st.chat_message("assistant"):
             with st.spinner("..."):
-                parts, _ = prepara_input_gemini(files) if files else ([], "")
-                
-                force_int = False
-                if len(st.session_state.messages) < 5 and not st.session_state.intervista_fatta and files:
-                    force_int = True
-                    st.session_state.intervista_fatta = True
+                resp = interroga_gemini(prompt, st.session_state.contesto_chat_text, parts, st.session_state.livello_aggressivita, True, False)
+                clean = sterilizza_chat(resp)
+                st.markdown(clean)
+                st.session_state.messages.append({"role":"assistant", "content":clean})
+                st.session_state.contesto_chat_text += f"\nAI: {clean}"
 
-                resp = interroga_gemini(prompt, st.session_state.contesto_chat_text, parts, active_model, st.session_state.livello_aggressivita, True, force_int)
-                
-                clean_resp = rimuovi_tabelle_forzato(resp)
-                st.markdown(clean_resp)
-                st.session_state.messages.append({"role": "assistant", "content": clean_resp})
-                st.session_state.contesto_chat_text += f"\nAI: {clean_resp}"
-                if force_int: st.rerun()
-
-# TAB 3 (FULL BRAINSTORMING IMPLEMENTATION)
-with tab3:
-    st.header("Generazione Documenti Ottimizzati")
+# TAB 3: DOCUMENTI
+with t3:
+    st.header("Generazione Atti")
+    fmt = st.radio("Formato", ["Word", "PDF"])
     
     col_a, col_b, col_c = st.columns(3)
     with col_a:
-        d1 = st.checkbox("Sintesi Esecutiva", help="Con Semafori e Valore Target")
-        d2 = st.checkbox("Timeline", help="Con Calcolo Giorni e Decadenze")
-        d3 = st.checkbox("Matrice Rischi", help="Con Riga Totale")
+        d1 = st.checkbox("Sintesi Esecutiva")
+        d2 = st.checkbox("Timeline")
+        d3 = st.checkbox("Matrice Rischi")
     with col_b:
-        d4 = st.checkbox("Punti di Attacco", help="Con Citazioni Pagina")
-        d5 = st.checkbox("Analisi Nota", help="Warfare Mode")
-        d6 = st.checkbox("Quesiti CTU", help="Trappole Logiche")
+        d4 = st.checkbox("Punti Attacco")
+        d5 = st.checkbox("Analisi Nota")
+        d6 = st.checkbox("Quesiti CTU")
     with col_c:
-        d7 = st.checkbox("Nota Replica", help="Math Injection")
-        d8 = st.checkbox("Strategia A/B", help="Scenari Comparati")
-        d9 = st.checkbox("Transazione", help="Ancoraggio Valore Tecnico")
-    
-    fmt = st.radio("Formato", ["Word", "PDF"])
-
-    if st.button("Genera Atti"):
-        payload, _ = prepara_input_gemini(files) if files else ([], "")
+        d7 = st.checkbox("Nota Replica")
+        d8 = st.checkbox("Strategia A/B")
+        d9 = st.checkbox("Bozza Transazione")
+        
+    if st.button("Genera"):
+        parts, _, _ = get_file_content(files) if files else ([],"","")
         tasks = []
         
-        # QUI IMPLEMENTO IL BRAINSTORMING ESATTO
-        if d1: tasks.append(("Sintesi_Esecutiva", "Crea Sintesi Esecutiva. REQUISITI: Usa bullet points 'SEMAFORICI' (🟢/🟡/🔴) per indicare il livello di rischio. Inserisci subito in alto un box con il 'Valore Target' del calcolatore."))
-        if d2: tasks.append(("Timeline", "Crea Timeline. REQUISITI: Evidenzia in GRASSETTO le date di decadenza. Calcola e scrivi esplicitamente i giorni/anni trascorsi tra gli eventi chiave (es. 'Trascorsi 25 anni')."))
-        if d3: tasks.append(("Matrice_Rischi", "Crea Matrice Rischi. REQUISITI: Colonne: Evento, Probabilità, Impatto (€). DEVI inserire una riga finale con la SOMMA TOTALE dell'esposizione finanziaria massima."))
-        if d4: tasks.append(("Punti_Attacco", "Crea Punti di Attacco. REQUISITI: Citation Mode attiva. Cita la pagina esatta dei documenti (es. 'Pag. 12 Perizia Familiari'). Usa i numeri del calcolatore per mostrare il delta economico esatto."))
-        if d5: tasks.append(("Analisi_Critica_Nota", "Analizza Nota Avversaria. REQUISITI: Warfare Mode. Se aggressività > 7, usa termini come 'inammissibile', 'infondato in fatto', 'strumentale'. Smonta ogni punto."))
-        if d6: tasks.append(("Quesiti_CTU", "Crea Quesiti CTU. REQUISITI: Trappole Logiche. Usa domande retoriche (es. 'Dica il CTU se ha verificato fisicamente...'). NON fare domande all'utente alla fine."))
-        if d7: tasks.append(("Nota_Replica", "Crea Nota Replica. REQUISITI: Math-Injection. Integra la tabella del calcolatore nel testo. Non dire 'valore basso', scrivi 'Il valore è € X a causa del coefficiente Y'."))
-        if d8: tasks.append(("Strategia_Processuale", "Crea Strategia. REQUISITI: Scenari A/B. Confronta 'Scenario A (Transazione Subito)' vs 'Scenario B (Guerra Totale)' con tabella costi/benefici stimati."))
-        if d9: tasks.append(("Bozza_Transazione", "Crea Bozza Transazione. REQUISITI: Ancoraggio. Ancora l'offerta al 'Valore Tecnico di Perizia' (quello del calcolatore) presentandolo come una concessione generosa."))
+        # PROMPT SPECIALE CON MARKER
+        if d1: tasks.append(("Sintesi_Esecutiva", "Crea Sintesi. REQUISITO: BOX VALORE TARGET IN CIMA. Emoji semaforici."))
+        if d2: tasks.append(("Timeline", "Crea Timeline. REQUISITO: Scrivi 'Trascorsi X anni' tra le date."))
+        if d3: tasks.append(("Matrice_Rischi", "Crea Matrice. REQUISITO: Riga Totale SOMMA in fondo."))
+        if d4: tasks.append(("Punti_Attacco", "Crea Punti Attacco. REQUISITO: Citazioni precise."))
+        if d5: tasks.append(("Analisi_Critica_Nota", "Analizza Nota. REQUISITO: Se Aggr>7 usa termini 'Inammissibile'."))
+        if d6: tasks.append(("Quesiti_CTU", "Crea Quesiti. REQUISITO: Nessun preambolo."))
+        if d7: tasks.append(("Nota_Replica", "Crea Nota Replica. REQUISITO: Inserisci il calcolo matematico."))
+        if d8: tasks.append(("Strategia_Processuale", "Crea Strategia A/B. REQUISITO: Stima costi per scenario."))
+        if d9: tasks.append(("Bozza_Transazione", "Crea Transazione. REQUISITO: Scadenza offerta 7 giorni."))
 
         st.session_state.generated_docs = {}
         bar = st.progress(0)
         
         for i, (name, prompt) in enumerate(tasks):
-            # Passiamo False a is_chat per permettere tabelle (ma la sanitizzazione rimuoverà i "Perfetto")
-            txt = interroga_gemini(prompt, st.session_state.contesto_chat_text, payload, active_model, st.session_state.livello_aggressivita, False)
-            
-            if fmt == "Word":
-                data = crea_word(txt, name)
-                mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                ext = "docx"
-            else:
-                data = crea_pdf_safe(txt, name)
-                mime = "application/pdf"
-                ext = "pdf"
-            st.session_state.generated_docs[name] = {"data":data, "mime":mime, "ext":ext}
+            raw = interroga_gemini(prompt, st.session_state.contesto_chat_text, parts, st.session_state.livello_aggressivita, False)
+            buf, mime, ext = crea_output_file(raw, name, fmt)
+            st.session_state.generated_docs[name] = {"data":buf, "mime":mime, "ext":ext}
             bar.progress((i+1)/len(tasks))
             
     if st.session_state.generated_docs:
+        zip_buf = crea_zip(st.session_state.generated_docs)
+        cli = st.session_state.nome_cliente
+        ts = datetime.now().strftime("%Y%m%d")
+        
+        st.download_button(f"📦 SCARICA FASCICOLO ZIP", zip_buf, f"Fascicolo_{cli}_{ts}.zip", "application/zip", type="primary")
+        
+        st.caption("Singoli:")
         cols = st.columns(4)
         for i, (k,v) in enumerate(st.session_state.generated_docs.items()):
-            cols[i%4].download_button(f"📥 {k}", v["data"], f"{k}.{v['ext']}", v["mime"])
-
+            # Nome file singolo con timestamp
+            cli = st.session_state.nome_cliente
+            ts = datetime.now().strftime("%Y%m%d")
+            fname = f"{k}_{cli}_{ts}.{v['ext']}"
+            cols[i%4].download_button(f"📥 {k}", v["data"], fname)
