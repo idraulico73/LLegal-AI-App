@@ -13,7 +13,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from fpdf import FPDF
 
 # --- CONFIGURAZIONE PAGINA ---
-st.set_page_config(page_title="GemKick Legal (Rev 35 - Golden Master)", layout="wide", page_icon="⚖️")
+st.set_page_config(page_title="GemKick Legal (Rev 36 - Chat Fix)", layout="wide", page_icon="⚖️")
 
 # --- CSS MIGLIORATO ---
 st.markdown("""
@@ -26,7 +26,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. GESTIONE MODELLI E API (AUTO-DISCOVERY RIPRISTINATO) ---
+# --- 1. GESTIONE MODELLI E API (AUTO-DISCOVERY) ---
 ACTIVE_MODEL = None
 FAST_MODEL = None
 STATUS_TEXT = "Inizializzazione..."
@@ -37,42 +37,28 @@ try:
     genai.configure(api_key=GENAI_KEY)
     HAS_KEY = True
     
-    # Logica Dinamica (Rev 25): Ottiene la lista reale dei modelli disponibili per la tua chiave
     available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
     
-    # Lista di priorità per il modello "Intelligente" (Docs & Chat)
-    priority_smart = [
-        "models/gemini-1.5-pro",          # Stabile
-        "models/gemini-1.5-pro-latest",   # Sperimentale
-        "models/gemini-1.5-pro-001",      # Legacy
-        "models/gemini-1.0-pro"           # Fallback
-    ]
-    
-    # Lista di priorità per il modello "Veloce" (Supervisor)
-    priority_fast = [
-        "models/gemini-1.5-flash",        # Stabile e veloce
-        "models/gemini-1.5-flash-latest",
-        "models/gemini-1.5-flash-001"
-    ]
+    # Priority List
+    priority_smart = ["models/gemini-1.5-pro", "models/gemini-1.5-pro-latest", "models/gemini-1.0-pro"]
+    priority_fast = ["models/gemini-1.5-flash", "models/gemini-1.5-flash-latest", "models/gemini-1.5-flash-001"]
 
-    # Selezione Smart Model
     for m in priority_smart:
         if m in available_models:
             ACTIVE_MODEL = m
             break
-    if not ACTIVE_MODEL and available_models: ACTIVE_MODEL = available_models[0] # Fallback estremo
+    if not ACTIVE_MODEL and available_models: ACTIVE_MODEL = available_models[0]
 
-    # Selezione Fast Model
     for m in priority_fast:
         if m in available_models:
             FAST_MODEL = m
             break
-    if not FAST_MODEL: FAST_MODEL = ACTIVE_MODEL # Se non c'è flash, usa quello smart
+    if not FAST_MODEL: FAST_MODEL = ACTIVE_MODEL
 
-    STATUS_TEXT = f"Motore Attivo: {ACTIVE_MODEL.replace('models/', '')} | Supervisor: {FAST_MODEL.replace('models/', '')}"
+    STATUS_TEXT = f"Motore: {ACTIVE_MODEL.replace('models/', '')} | Supervisor: {FAST_MODEL.replace('models/', '')}"
 
 except Exception as e:
-    STATUS_TEXT = f"Errore API/Modelli: {str(e)}"
+    STATUS_TEXT = f"Errore API: {str(e)}"
     HAS_KEY = False
 
 # --- MEMORIA DI SESSIONE ---
@@ -86,7 +72,7 @@ if "doc_queue" not in st.session_state: st.session_state.doc_queue = []
 if "supervisor_history" not in st.session_state: st.session_state.supervisor_history = []
 if "generated_docs" not in st.session_state: st.session_state.generated_docs = {}
 
-# --- PROMPT LIBRARY AGNOSTICA ---
+# --- PROMPT LIBRARY ---
 DOC_PROMPTS = {
     "Sintesi_Esecutiva": "TASK: 1. TIMELINE NARRATIVA (Causa->Effetto). 2. SINTESI ESECUTIVA (Numeri Chiave).",
     "Timeline": "Crea una Timeline Cronologica rigorosa. Evidenzia in GRASSETTO le date critiche.",
@@ -180,31 +166,50 @@ def prepara_input_gemini(uploaded_files):
         except Exception as e: st.error(f"Errore {file.name}: {e}")
     return input_parts, log
 
-# --- FUNZIONI CORE (SUPERVISOR & GENERATOR) ---
+# --- FUNZIONI CORE ---
+
 def check_sufficiency(context_parts, doc_queue, history):
     if not HAS_KEY or not FAST_MODEL: return "READY", ""
-    model = genai.GenerativeModel(FAST_MODEL) # Usa il modello veloce scoperto dinamicamente
-    
-    # Prepara solo testo per velocità
+    model = genai.GenerativeModel(FAST_MODEL)
     text_context = [p for p in context_parts if isinstance(p, str)]
     context_str = "".join(text_context)[:30000]
     docs_to_gen = ", ".join([d[0] for d in doc_queue])
     hist_txt = "\n".join([f"{r}: {m}" for r, m in history])
-    
-    prompt = f"""
-    SEI UN SUPERVISORE LEGALE. Doc da fare: {docs_to_gen}.
-    CONTESTO: {context_str}
-    STORICO: {hist_txt}
-    Mancano dati CRITICI (nomi, cifre)? Se sì, fai 1 domanda. Se no, rispondi READY.
-    """
+    prompt = f"SEI UN SUPERVISORE. Doc da fare: {docs_to_gen}.\nCONTESTO: {context_str}\nSTORICO: {hist_txt}\nMancano dati CRITICI? Se sì, fai 1 domanda. Se no, rispondi READY."
     try:
         res = model.generate_content(prompt).text.strip()
         return ("READY", "") if "READY" in res.upper() else ("ASK", res)
     except: return "READY", ""
 
+# NUOVA FUNZIONE SOLO PER LA CHAT (TAB 2)
+def genera_risposta_chat(prompt_utente, context_parts, history):
+    if not HAS_KEY or not ACTIVE_MODEL: return "ERRORE: Modello non disponibile."
+    model = genai.GenerativeModel(ACTIVE_MODEL)
+    
+    chat_ctx = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in history if m['role'] == 'user'])
+    
+    # Prompt specifico per evitare tabelle e layout rotti
+    sys_prompt = """
+    SEI UN ASSISTENTE LEGALE ESPERTO E DIRETTO.
+    REGOLE TASSATIVE PER LA CHAT:
+    1. NON USARE MAI TABELLE MARKDOWN (si leggono male in chat).
+    2. Usa elenchi puntati (*), grassetti e spaziature per strutturare i dati.
+    3. Sii sintetico e vai dritto al punto.
+    4. Usa un tono professionale ma discorsivo.
+    """
+    
+    payload = list(context_parts)
+    payload.append(f"\nINFO PREGRESSE:\n{chat_ctx}\n\nDOMANDA UTENTE: {prompt_utente}")
+    
+    try:
+        res = model.generate_content(payload)
+        return res.text # Qui non puliamo i saluti, è una chat!
+    except Exception as e: return f"Errore: {e}"
+
+# FUNZIONE PER I DOCUMENTI (TAB 3 - MANTIENE TABELLE)
 def genera_documento_finale(nome_doc, prompt_speciale, context_parts, postura_val, dati_calc, history):
     if not HAS_KEY or not ACTIVE_MODEL: return "ERRORE: Modello non disponibile."
-    model = genai.GenerativeModel(ACTIVE_MODEL) # Usa il modello smart scoperto dinamicamente
+    model = genai.GenerativeModel(ACTIVE_MODEL)
     
     if postura_val <= 3: post_desc = "DIPLOMATICA/SOFT"
     elif postura_val <= 7: post_desc = "FERMA/PROFESSIONALE"
@@ -215,7 +220,7 @@ def genera_documento_finale(nome_doc, prompt_speciale, context_parts, postura_va
     sys_prompt = f"""
     SEI GEMINI, STRATEGA FORENSE SENIOR. POSTURA: {post_desc}.
     DATI CALCOLATORE: {dati_calc}
-    REGOLE: NO SALUTI. USA MARKDOWN. TABELLE MARKDOWN (|...|).
+    REGOLE DOC: NO SALUTI. USA MARKDOWN. USA TABELLE MARKDOWN (|...|).
     ISTRUZIONE: {prompt_speciale}
     """
     payload = list(context_parts)
@@ -230,24 +235,18 @@ def genera_documento_finale(nome_doc, prompt_speciale, context_parts, postura_va
 with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/8/8a/Google_Gemini_logo.svg", width=150)
     st.markdown("### ⚙️ Configurazione")
-    
-    # Feedback visivo sui modelli attivi
     if HAS_KEY: st.success(STATUS_TEXT)
-    else: st.error("⚠️ Verifica API Key nei secrets.")
-    
+    else: st.error("⚠️ Verifica API Key")
     postura_level = st.slider("Aggressività", 1, 10, 7)
-    if postura_level > 7: st.caption("🔥 NUCLEAR")
-    elif postura_level < 4: st.caption("🕊️ SOFT")
-    else: st.caption("⚖️ HARD")
     formato_output = st.radio("Output:", ["Word", "PDF"])
 
 # --- MAIN LAYOUT ---
-st.title("⚖️ GemKick Legal Suite (Golden Master)")
-st.caption("Auto-Discovery Models + Supervisor + Calculator Integration")
+st.title("⚖️ GemKick Legal Suite (Rev 36)")
+st.caption("Auto-Discovery + Chat Fix + Supervisor")
 
 tab1, tab2, tab3 = st.tabs(["🏠 Calcolatore", "💬 Chat & Upload", "📄 Generazione Documenti"])
 
-# TAB 1: CALCOLATORE (REV 25)
+# TAB 1: CALCOLATORE
 with tab1:
     st.header("📉 Calcolatore Deprezzamento")
     col1, col2 = st.columns([1, 2])
@@ -271,7 +270,7 @@ with tab1:
             st.session_state.dati_calcolatore = f"VALORE BASE: €{valore_base}\nCOEFFICIENTI:\n{det}VALORE FINALE: €{v_fin}"
             st.success(f"Valore Netto: € {v_fin:,.2f}"); st.caption("Dati in memoria AI.")
 
-# TAB 2: UPLOAD & CHAT
+# TAB 2: UPLOAD & CHAT (CORRETTO)
 with tab2:
     st.write("### 1. Caricamento")
     uploaded_files = st.file_uploader("Fascicolo (PDF, IMG, TXT)", accept_multiple_files=True)
@@ -290,7 +289,8 @@ with tab2:
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"): st.write(prompt)
         with st.spinner("Analisi..."):
-            risposta = genera_documento_finale("Risposta Chat", prompt, parts_dossier, postura_level, st.session_state.dati_calcolatore, [])
+            # USA LA NUOVA FUNZIONE SPECIFICA PER LA CHAT
+            risposta = genera_risposta_chat(prompt, parts_dossier, st.session_state.messages)
             st.session_state.messages.append({"role": "assistant", "content": risposta})
             st.rerun()
 
