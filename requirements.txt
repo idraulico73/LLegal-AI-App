@@ -1,6 +1,6 @@
 streamlit
-openai
+google-generativeai>=0.7.0
 pypdf
 python-docx
 fpdf
-google-generativeai>=0.7.0
+pillow
