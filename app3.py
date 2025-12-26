@@ -14,48 +14,46 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from fpdf import FPDF
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(page_title="Ingegneria Forense AI (V21 - Autopilot)", layout="wide")
+st.set_page_config(page_title="Ingegneria Forense AI (V23 - Pro Forced)", layout="wide")
 
-# --- LOGICA "CERVELLO" AUTOMATICO (Nessuna scelta utente) ---
+# --- MOTORE DI SELEZIONE MODELLO (Logica Aggressiva per PRO) ---
 active_model = None
 status_text = "Inizializzazione..."
-status_color = "off" # off, green, red
+status_color = "off"
 
 try:
     GENAI_KEY = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=GENAI_KEY)
     HAS_KEY = True
     
-    # 1. Chiediamo a Google cosa c'è disponibile
+    # 1. Ottieni lista modelli dalla tua chiave
     all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
     
-    # 2. Lista di priorità (dal più intelligente al più veloce)
-    # Cerchiamo varianti del PRO, poi FLASH
-    priority_list = [
-        "models/gemini-1.5-pro-latest",
-        "models/gemini-1.5-pro",
-        "models/gemini-1.5-pro-001",
-        "models/gemini-1.5-pro-002",
-        "models/gemini-1.5-flash-latest",
-        "models/gemini-1.5-flash",
-        "models/gemini-pro"
-    ]
+    # 2. CERCA PRO A TUTTI I COSTI
+    # Cerchiamo specificamente stringhe che contengono "1.5" E "pro"
+    pro_candidates = [m for m in all_models if "1.5" in m and "pro" in m]
+    flash_candidates = [m for m in all_models if "flash" in m]
     
-    # 3. Selezione automatica del primo match
-    for candidate in priority_list:
-        if candidate in all_models:
-            active_model = candidate
-            break
-            
-    # 4. Fallback estremo (se non trova nulla di noto, prende il primo della lista Google)
-    if not active_model and all_models:
+    if pro_candidates:
+        # Prendi il più recente (spesso l'ultimo della lista o quello con 'latest')
+        # Ordiniamo per lunghezza per prendere quelli più specifici o latest
+        pro_candidates.sort(key=len, reverse=True)
+        active_model = pro_candidates[0]
+    elif flash_candidates:
+        active_model = flash_candidates[0]
+    elif all_models:
         active_model = all_models[0]
         
     if active_model:
-        status_text = f"Attivo: {active_model.replace('models/', '')}"
+        clean_name = active_model.replace('models/', '')
+        status_text = f"Attivo: {clean_name}"
         status_color = "green"
+        # Avviso se siamo su Flash
+        if "flash" in clean_name.lower():
+            status_text += " (Nota: Chiave API limitata sul Pro, uso Flash)"
+            status_color = "orange"
     else:
-        status_text = "Nessun modello compatibile trovato."
+        status_text = "Nessun modello trovato."
         status_color = "red"
 
 except Exception as e:
@@ -68,7 +66,7 @@ if "messages" not in st.session_state: st.session_state.messages = []
 if "contesto_chat_text" not in st.session_state: st.session_state.contesto_chat_text = ""
 if "generated_docs" not in st.session_state: st.session_state.generated_docs = {} 
 
-# --- FUNZIONI ---
+# --- FUNZIONI UTILI ---
 
 def markdown_to_docx(doc, text):
     lines = text.split('\n')
@@ -178,13 +176,17 @@ def crea_pdf(testo, titolo):
 # --- SIDEBAR ---
 with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/8/8a/Google_Gemini_logo.svg", width=150)
-    st.markdown("### 🤖 Motore AI")
     
-    # NESSUN MENU DI SCELTA! SOLO INFO.
+    st.markdown("### 🧠 Cervello AI")
     if status_color == "green":
         st.success(status_text)
+    elif status_color == "orange":
+        st.warning(status_text)
     else:
         st.error(status_text)
+        
+    with st.expander("🔍 Lista Modelli Trovati"):
+        st.code("\n".join(all_models) if HAS_KEY else "Errore Key")
     
     st.divider()
     postura = st.radio("Postura Strategica:", ["Diplomatica", "Aggressiva"], index=1)
@@ -196,7 +198,7 @@ with st.sidebar:
 
 # --- MAIN APP ---
 st.title("⚖️ Ingegneria Forense & Strategy AI")
-st.caption(f"Versione 21.0 - Motore Automatico")
+st.caption(f"Versione 23.0 - Pro Forced")
 
 tab1, tab2, tab3 = st.tabs(["🏠 Calcolatore", "💬 Chat Strategica", "📄 Generazione Documenti"])
 
@@ -246,7 +248,7 @@ with tab1:
             
             st.success(f"### Valore Netto Stimato: € {valore_finale:,.2f}")
             st.metric("Deprezzamento Totale Cumulato", f"- {deprezzamento_totale_perc:.2f}%")
-            st.markdown("**Dettaglio applicato:**")
+            st.markdown("**Dettaglio applicato (Moltiplicatoria):**")
             st.code(" * ".join(dettaglio) + f" = {(fattore_residuo):.4f}")
 
 # ==============================================================================
@@ -275,7 +277,7 @@ with tab2:
             with st.chat_message("user"): st.markdown(prompt)
             
             with st.chat_message("assistant"):
-                with st.spinner(f"Gemini sta analizzando..."):
+                with st.spinner(f"Analisi in corso..."):
                     parts_dossier, _ = prepara_input_gemini(uploaded_files)
                     risposta = interroga_gemini(prompt, st.session_state.contesto_chat_text, parts_dossier, active_model, postura)
                     st.markdown(risposta)
@@ -290,7 +292,7 @@ with tab3:
         st.warning("Carica i file nel Tab Chat prima.")
     else:
         st.header("🛒 Generazione Documenti")
-        st.caption(f"Generazione affidata a: {active_model}")
+        st.caption(f"Generazione affidata a: {active_model.replace('models/', '') if active_model else 'N/A'}")
         
         c1, c2 = st.columns(2)
         with c1:
