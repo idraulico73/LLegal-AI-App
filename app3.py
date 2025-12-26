@@ -15,7 +15,7 @@ from fpdf import FPDF
 # --- BRANDING & CONFIGURAZIONE GLOBALE ---
 APP_NAME = "LexVantage"
 APP_SUBTITLE = "Ingegneria Forense & Strategia Processuale"
-APP_VERSION = "v1.1 (Stable)"
+APP_VERSION = "v1.2 (No-Table Guardrail)"
 APP_ICON = "⚖️"
 
 st.set_page_config(
@@ -24,50 +24,19 @@ st.set_page_config(
     page_icon=APP_ICON
 )
 
-# --- CSS MIGLIORATO (STILE PREMIUM) ---
+# --- CSS MIGLIORATO ---
 st.markdown("""
 <style>
-    /* Stile Bottoni */
-    .stButton>button { 
-        width: 100%; 
-        border-radius: 6px; 
-        height: 3.5em; 
-        font-weight: 600; 
-        text-transform: uppercase; 
-        letter-spacing: 0.5px;
-        transition: all 0.3s ease;
-    }
-    .stButton>button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-    }
-    
-    /* Stile Chat */
-    .chat-message { 
-        padding: 1.2rem; 
-        border-radius: 8px; 
-        margin-bottom: 1rem; 
-        display: flex; 
-        align-items: flex-start; 
-        gap: 15px; 
-        font-family: 'Source Sans Pro', sans-serif;
-    }
+    .stButton>button { width: 100%; border-radius: 6px; height: 3.5em; font-weight: 600; text-transform: uppercase; transition: all 0.3s ease; }
+    .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+    .chat-message { padding: 1.2rem; border-radius: 8px; margin-bottom: 1rem; display: flex; align-items: flex-start; gap: 15px; font-family: 'Source Sans Pro', sans-serif; }
     .chat-message.user { background-color: #f0f2f6; border-left: 4px solid #95a5a6; }
-    .chat-message.bot { background-color: #ffffff; border: 1px solid #e0e0e0; border-left: 4px solid #3498db; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    
-    /* Stile Supervisor */
-    .status-box { 
-        padding: 15px; 
-        border-radius: 8px; 
-        margin-bottom: 20px; 
-        border-left: 5px solid #2ecc71; 
-        background-color: #eafaf1; 
-        color: #27ae60;
-    }
+    .chat-message.bot { background-color: #ffffff; border: 1px solid #e0e0e0; border-left: 4px solid #3498db; }
+    .status-box { padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 5px solid #2ecc71; background-color: #eafaf1; color: #27ae60; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. GESTIONE MODELLI E API (AUTO-DISCOVERY) ---
+# --- 1. GESTIONE MODELLI E API ---
 ACTIVE_MODEL = None
 FAST_MODEL = None
 STATUS_TEXT = "Inizializzazione..."
@@ -77,23 +46,18 @@ try:
     GENAI_KEY = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=GENAI_KEY)
     HAS_KEY = True
-    
     available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
     
-    # Priority List (Smart & Fast)
+    # Priority Lists
     priority_smart = ["models/gemini-1.5-pro", "models/gemini-1.5-pro-latest", "models/gemini-1.0-pro"]
     priority_fast = ["models/gemini-1.5-flash", "models/gemini-1.5-flash-latest", "models/gemini-1.5-flash-001"]
 
     for m in priority_smart:
-        if m in available_models:
-            ACTIVE_MODEL = m
-            break
+        if m in available_models: ACTIVE_MODEL = m; break
     if not ACTIVE_MODEL and available_models: ACTIVE_MODEL = available_models[0]
 
     for m in priority_fast:
-        if m in available_models:
-            FAST_MODEL = m
-            break
+        if m in available_models: FAST_MODEL = m; break
     if not FAST_MODEL: FAST_MODEL = ACTIVE_MODEL
 
     STATUS_TEXT = f"Motore: {ACTIVE_MODEL.replace('models/', '')} | Supervisor: {FAST_MODEL.replace('models/', '')}"
@@ -105,7 +69,6 @@ except Exception as e:
 # --- MEMORIA DI SESSIONE ---
 if "messages" not in st.session_state: st.session_state.messages = []
 if "dati_calcolatore" not in st.session_state: st.session_state.dati_calcolatore = "Nessun calcolo effettuato."
-# Stati Supervisor
 if "sufficiency_check" not in st.session_state: st.session_state.sufficiency_check = False
 if "ready_to_generate" not in st.session_state: st.session_state.ready_to_generate = False
 if "question_count" not in st.session_state: st.session_state.question_count = 0
@@ -113,9 +76,9 @@ if "doc_queue" not in st.session_state: st.session_state.doc_queue = []
 if "supervisor_history" not in st.session_state: st.session_state.supervisor_history = []
 if "generated_docs" not in st.session_state: st.session_state.generated_docs = {}
 
-# --- PROMPT LIBRARY (STRATEGIA COMMERCIALE) ---
+# --- PROMPT LIBRARY ---
 DOC_PROMPTS = {
-    "Sintesi_Esecutiva": "TASK: 1. TIMELINE NARRATIVA (Causa->Effetto). 2. SINTESI ESECUTIVA (Numeri Chiave, Decisioni Urgenti).",
+    "Sintesi_Esecutiva": "TASK: 1. TIMELINE NARRATIVA (Causa->Effetto). 2. SINTESI ESECUTIVA (Numeri Chiave).",
     "Timeline": "Crea una Timeline Cronologica rigorosa. Evidenzia in GRASSETTO le date critiche.",
     "Punti_Attacco": "Elenca i Punti di Attacco tecnici. Usa i dati del calcolatore per dimostrare l'errore di stima.",
     "Analisi_Critica_Nota": "Analizza la nota avversaria. Evidenzia le contraddizioni logiche e tecniche.",
@@ -134,7 +97,9 @@ DOC_PROMPTS = {
 }
 
 # --- FUNZIONI UTILITY ---
+
 def clean_ai_response(text):
+    """Pulisce i saluti iniziali/finali per i documenti DOCX"""
     patterns = [r"^Assolutamente.*", r"^Certo.*", r"^Ecco.*", r"^Analizzo.*", r"^Generato il.*", r"Spero che.*", r"Dimmi se.*"]
     lines = text.split('\n')
     cleaned = []
@@ -145,6 +110,27 @@ def clean_ai_response(text):
             skip = False
         cleaned.append(line)
     return "\n".join(cleaned).strip()
+
+def force_no_tables(text):
+    """
+    SANITIZZATORE BRUTALE:
+    Rileva se ci sono righe di tabelle Markdown (|...|) e le converte in elenco puntato.
+    """
+    lines = text.split('\n')
+    clean_lines = []
+    for line in lines:
+        # Rileva la riga di separazione tabella (es. |---|---|) e la salta
+        if "|" in line and set(line.strip()) <= {'|', '-', ':', ' '}:
+            continue
+        
+        # Se è una riga di dati tabella (inizia con |)
+        if line.strip().startswith('|'):
+            # Sostituisce i pipe con spazi o bullet
+            content = line.replace('|', '  ').strip()
+            clean_lines.append(f"• {content}")
+        else:
+            clean_lines.append(line)
+    return "\n".join(clean_lines)
 
 def create_word_table(doc, table_lines):
     rows = [l for l in table_lines if not re.search(r'\|\s*:?-+:?\s*\|', l)]
@@ -207,7 +193,7 @@ def prepara_input_gemini(uploaded_files):
         except Exception as e: st.error(f"Errore {file.name}: {e}")
     return input_parts, log
 
-# --- FUNZIONI CORE (FIXED) ---
+# --- FUNZIONI CORE ---
 
 def check_sufficiency(context_parts, doc_queue, history):
     if not HAS_KEY or not FAST_MODEL: return "READY", ""
@@ -225,34 +211,32 @@ def check_sufficiency(context_parts, doc_queue, history):
 def genera_risposta_chat(prompt_utente, context_parts, history):
     if not HAS_KEY or not ACTIVE_MODEL: return "ERRORE: Modello non disponibile."
     
-    # SYSTEM PROMPT PER CHAT (NO TABELLE)
+    # System Instruction: ORDINE TASSATIVO NO TABELLE
     sys_prompt = """
     SEI UN CONSULENTE DI LEXVANTAGE.
     REGOLE TASSATIVE PER LA CHAT:
-    1. NON USARE MAI TABELLE MARKDOWN (usa elenchi puntati o numerati).
-    2. Sii sintetico, strategico e diretto.
-    3. Usa grassetti per evidenziare i concetti chiave.
+    1. NON USARE MAI TABELLE MARKDOWN O SIMBOLI PIPE '|'.
+    2. SE IL TESTO SORGENTE HA TABELLE, TRASFORMALE IN ELENCHI PUNTATI.
+    3. Sii sintetico e strategico.
     """
     
-    # Inizializzo il modello CON le istruzioni di sistema (FIX REV 38)
     model = genai.GenerativeModel(ACTIVE_MODEL, system_instruction=sys_prompt)
-    
     chat_ctx = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in history if m['role'] == 'user'])
-    
     payload = list(context_parts)
-    payload.append(f"\nINFO PREGRESSE:\n{chat_ctx}\n\nDOMANDA UTENTE: {prompt_utente}")
+    payload.append(f"\nINFO: {chat_ctx}\nDOMANDA: {prompt_utente}\nRICORDA: NIENTE TABELLE.")
     
-    try: return model.generate_content(payload).text
+    try:
+        raw_text = model.generate_content(payload).text
+        # GUARDRAIL FINALE: Se l'AI disobbedisce, forziamo la pulizia via codice
+        return force_no_tables(raw_text)
     except Exception as e: return f"Errore: {e}"
 
 def genera_documento_finale(nome_doc, prompt_speciale, context_parts, postura_val, dati_calc, history):
     if not HAS_KEY or not ACTIVE_MODEL: return "ERRORE: Modello non disponibile."
-    
     if postura_val <= 3: post_desc = "DIPLOMATICA/SOFT"
     elif postura_val <= 7: post_desc = "FERMA/PROFESSIONALE"
     else: post_desc = "AGGRESSIVA/NUCLEAR"
     
-    # SYSTEM PROMPT PER DOCUMENTI (SI TABELLE)
     sys_prompt = f"""
     SEI L'AI DI {APP_NAME}, STRATEGA FORENSE SENIOR. POSTURA: {post_desc}.
     DATI CALCOLATORE: {dati_calc}
@@ -263,11 +247,8 @@ def genera_documento_finale(nome_doc, prompt_speciale, context_parts, postura_va
     ISTRUZIONE SPECIFICA: {prompt_speciale}
     """
     
-    # Inizializzo il modello CON le istruzioni di sistema (FIX REV 38)
     model = genai.GenerativeModel(ACTIVE_MODEL, system_instruction=sys_prompt)
-    
     chat_ctx = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in history if m['role'] == 'user'])
-    
     payload = list(context_parts)
     payload.append(f"\nINFO EXTRA:\n{chat_ctx}\nGENERA DOC.")
     
@@ -281,6 +262,11 @@ with st.sidebar:
     st.markdown(f"## {APP_ICON} {APP_NAME}")
     st.caption(f"{APP_SUBTITLE} - {APP_VERSION}")
     st.divider()
+    
+    if st.button("🗑️ Cancella Memoria Chat"):
+        st.session_state.messages = []
+        st.session_state.supervisor_history = []
+        st.rerun()
     
     st.markdown("### ⚙️ Configurazione")
     if HAS_KEY: st.success(STATUS_TEXT)
