@@ -465,52 +465,72 @@ with tab1:
                 st.code(st.session_state.dati_calcolatore)
 
 # ==============================================================================
-# TAB 2: CHAT GEMINI (CON FIX TABELLE)
+# TAB 2: CHAT GEMINI (REVISIONE "ANTI-TABELLA" TOTALE)
 # ==============================================================================
 with tab2:
+    st.header("Analisi Fascicolo & Strategia")
+    
+    # --- 1. FUNZIONE DI PULIZIA LOCALE AGGRESSIVA ---
+    def rimuovi_tabelle_forzato(testo):
+        """
+        Questa funzione distrugge la sintassi Markdown delle tabelle.
+        Sostituisce i pipe '|' con trattini ' - ' per impedire il rendering HTML.
+        """
+        if not testo: return ""
+        # Sostituisce ogni pipe con un trattino. Streamlit NON PUÒ fare tabelle senza pipe.
+        return testo.replace("|", " - ")
+
+    # --- 2. GESTIONE UPLOAD ---
     st.write("### 1. Carica il Fascicolo")
-    st.caption("Trascina qui tutti i documenti (PDF, Foto, Note). L'AI li leggerà tutti.")
-    uploaded_files = st.file_uploader("Upload Documenti", accept_multiple_files=True, key="up_chat")
+    uploaded_files = st.file_uploader("Upload Documenti", accept_multiple_files=True, key="up_chat_fixed")
     
     if uploaded_files:
         _, log_debug = prepara_input_gemini(uploaded_files)
         with st.expander("✅ Log Lettura File", expanded=False):
             st.text(log_debug)
         
+    # Inizializza messaggio di benvenuto se vuoto
     if not st.session_state.messages:
         welcome = "Ho letto il fascicolo. I dati del calcolatore sono in memoria. Come procediamo?"
         st.session_state.messages.append({"role": "assistant", "content": welcome})
     
-    # --- PUNTO CRITICO: QUI È DOVE C'ERA IL LOOP ---
-    # Ora applichiamo la sterilizzazione per evitare tabelle rotte
+    # --- 3. RENDERING STORICO (IL PUNTO CRITICO) ---
+    # Qui sta il trucco: applichiamo la pulizia OGNI VOLTA che leggiamo dalla memoria.
+    # Anche se in memoria c'è una tabella, qui viene distrutta prima di essere mostrata.
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             if msg["role"] == "assistant":
-                # SE È L'AI: Pulisci il testo rimuovendo le tabelle
-                content_safe = sterilizza_output_chat(msg["content"])
-                st.markdown(content_safe)
+                # PULIZIA IN TEMPO REALE SULLO STORICO
+                contenuto_sicuro = rimuovi_tabelle_forzato(msg["content"])
+                st.markdown(contenuto_sicuro)
             else:
-                # SE È L'UTENTE: Stampa normale
                 st.markdown(msg["content"])
             
-    if prompt := st.chat_input("Es: Scrivi una replica alla nota avversaria..."):
+    # --- 4. NUOVA RICHIESTA ---
+    if prompt := st.chat_input("Es: Analizza i rischi..."):
+        # Mostra subito input utente
         st.session_state.messages.append({"role": "user", "content": prompt})
         st.session_state.contesto_chat_text += f"\nUtente: {prompt}"
-        with st.chat_message("user"): st.markdown(prompt)
+        with st.chat_message("user"): 
+            st.markdown(prompt)
         
+        # Generazione risposta AI
         with st.chat_message("assistant"):
-            with st.spinner(f"Analisi in corso..."):
-                parts_dossier, _ = prepara_input_gemini(uploaded_files)
-                # Chiediamo risposta all'AI
-                risposta = interroga_gemini(prompt, st.session_state.contesto_chat_text, parts_dossier, active_model, postura)
+            with st.spinner("Analisi in corso..."):
+                parts_dossier, _ = prepara_input_gemini(uploaded_files) if uploaded_files else ([], "")
                 
-                # --- FIX ANCHE QUI: Sterilizziamo la risposta appena arrivata ---
-                risposta_safe = sterilizza_output_chat(risposta)
-                st.markdown(risposta_safe)
+                # Ottieni risposta grezza (che potrebbe contenere tabelle)
+                risposta_grezza = interroga_gemini(prompt, st.session_state.contesto_chat_text, parts_dossier, active_model, postura)
                 
-                # Salviamo in memoria (puoi salvare l'originale o safe, qui salvo l'originale per i PDF)
-                st.session_state.messages.append({"role": "assistant", "content": risposta})
-                st.session_state.contesto_chat_text += f"\nGemini: {risposta}"
+                # --- PASSAGGIO FONDAMENTALE ---
+                # 1. Pulisci la risposta ORA per mostrarla
+                risposta_pulita = rimuovi_tabelle_forzato(risposta_grezza)
+                st.markdown(risposta_pulita)
+                
+                # 2. Salva in memoria la versione PULITA (così non si ripresenta il problema al refresh)
+                #    NOTA: Salviamo 'risposta_pulita', NON 'risposta_grezza'
+                st.session_state.messages.append({"role": "assistant", "content": risposta_pulita})
+                st.session_state.contesto_chat_text += f"\nGemini: {risposta_pulita}"
 # ==============================================================================
 # TAB 3: GENERAZIONE ATTI (PRO MODE)
 # ==============================================================================
@@ -582,3 +602,4 @@ with tab3:
                 file_name=f"{key}.{val['ext']}",
                 mime=val['mime']
             )
+
