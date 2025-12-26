@@ -14,9 +14,9 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from fpdf import FPDF
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(page_title="Ingegneria Forense AI (V23 - Pro Forced)", layout="wide")
+st.set_page_config(page_title="Ingegneria Forense AI (V24 - Full Suite)", layout="wide")
 
-# --- MOTORE DI SELEZIONE MODELLO (Logica Aggressiva per PRO) ---
+# --- CERVELLO AUTOMATICO ---
 active_model = None
 status_text = "Inizializzazione..."
 status_color = "off"
@@ -26,17 +26,13 @@ try:
     genai.configure(api_key=GENAI_KEY)
     HAS_KEY = True
     
-    # 1. Ottieni lista modelli dalla tua chiave
     all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
     
-    # 2. CERCA PRO A TUTTI I COSTI
-    # Cerchiamo specificamente stringhe che contengono "1.5" E "pro"
+    # Cerca PRO a tutti i costi
     pro_candidates = [m for m in all_models if "1.5" in m and "pro" in m]
     flash_candidates = [m for m in all_models if "flash" in m]
     
     if pro_candidates:
-        # Prendi il più recente (spesso l'ultimo della lista o quello con 'latest')
-        # Ordiniamo per lunghezza per prendere quelli più specifici o latest
         pro_candidates.sort(key=len, reverse=True)
         active_model = pro_candidates[0]
     elif flash_candidates:
@@ -48,10 +44,6 @@ try:
         clean_name = active_model.replace('models/', '')
         status_text = f"Attivo: {clean_name}"
         status_color = "green"
-        # Avviso se siamo su Flash
-        if "flash" in clean_name.lower():
-            status_text += " (Nota: Chiave API limitata sul Pro, uso Flash)"
-            status_color = "orange"
     else:
         status_text = "Nessun modello trovato."
         status_color = "red"
@@ -180,13 +172,8 @@ with st.sidebar:
     st.markdown("### 🧠 Cervello AI")
     if status_color == "green":
         st.success(status_text)
-    elif status_color == "orange":
-        st.warning(status_text)
     else:
         st.error(status_text)
-        
-    with st.expander("🔍 Lista Modelli Trovati"):
-        st.code("\n".join(all_models) if HAS_KEY else "Errore Key")
     
     st.divider()
     postura = st.radio("Postura Strategica:", ["Diplomatica", "Aggressiva"], index=1)
@@ -198,7 +185,7 @@ with st.sidebar:
 
 # --- MAIN APP ---
 st.title("⚖️ Ingegneria Forense & Strategy AI")
-st.caption(f"Versione 23.0 - Pro Forced")
+st.caption(f"Versione 24.0 - Full Suite (Products & Upsell)")
 
 tab1, tab2, tab3 = st.tabs(["🏠 Calcolatore", "💬 Chat Strategica", "📄 Generazione Documenti"])
 
@@ -285,31 +272,57 @@ with tab2:
                     st.session_state.contesto_chat_text += f"\nGemini: {risposta}"
 
 # ==============================================================================
-# TAB 3: GENERAZIONE DOCUMENTI
+# TAB 3: GENERAZIONE DOCUMENTI (SUPERMARKET)
 # ==============================================================================
 with tab3:
     if not uploaded_files:
         st.warning("Carica i file nel Tab Chat prima.")
     else:
-        st.header("🛒 Generazione Documenti")
-        st.caption(f"Generazione affidata a: {active_model.replace('models/', '') if active_model else 'N/A'}")
+        st.header("🛒 Generazione Documenti & Strategie")
+        st.caption(f"Motore: {active_model.replace('models/', '') if active_model else 'N/A'}")
         
+        st.markdown("### 📂 1. Analisi & Sintesi (Start)")
         c1, c2 = st.columns(2)
         with c1:
-            doc1 = st.checkbox("Timeline Cronologica")
-            doc2 = st.checkbox("Analisi Critica Nota")
+            doc_sintesi = st.checkbox("Sintesi Esecutiva Fascicolo (Executive Summary)", help="Riassunto neutrale per avere il quadro completo.")
         with c2:
-            doc3 = st.checkbox("Strategia Processuale")
-            doc4 = st.checkbox("Nota Tecnica di Replica")
-            
+            doc_timeline = st.checkbox("Timeline Cronologica Rigorosa", help="Date, Eventi e Riferimenti pagina per pagina.")
+
+        st.markdown("### ⚔️ 2. Attacco & Difesa (Core)")
+        c3, c4 = st.columns(2)
+        with c3:
+            doc_attacco = st.checkbox("Punti di Attacco Tecnici", help="Elenco dei vizi, errori CTU e violazioni normative.")
+            doc_nota = st.checkbox("Analisi Critica Nota Avversaria", help="Analisi puntuale e demolitiva delle note di controparte.")
+        with c4:
+            doc_quesiti = st.checkbox("Quesiti/Osservazioni per il CTU", help="Domande 'trappola' da fare al CTU in udienza.")
+            doc_replica = st.checkbox("Nota Tecnica di Replica (Rewrite)", help="Riscrive la tua nota in versione potenziata/aggressiva.")
+
+        st.markdown("### 🤝 3. Strategia & Chiusura (Upsell)")
+        c5, c6 = st.columns(2)
+        with c5:
+            doc_strategia = st.checkbox("Strategia Processuale (Poker)", help="Strategia ottimistica/pessimistica e Next Best Action.")
+            doc_matrice = st.checkbox("Matrice dei Rischi (Best/Worst Case)", help="Tabella con scenari economici per convincere il cliente.")
+        with c6:
+            doc_transazione = st.checkbox("Bozza Proposta Transattiva", help="Lettera formale 'Senza riconoscimento di debito' per chiudere.")
+
+        # LOGICA DI SELEZIONE
         selected = []
-        if doc1: selected.append(("Timeline", "Crea una Timeline dettagliata."))
-        if doc2: selected.append(("Analisi_Nota", "Analizza la nota avversaria."))
-        if doc3: selected.append(("Strategia", "Definisci la strategia (Poker). Cita cifre."))
-        if doc4: selected.append(("Replica", "RISCRIVI la nota in versione ottimizzata."))
+        # Gruppo 1
+        if doc_sintesi: selected.append(("Sintesi_Esecutiva", "Crea una Sintesi Esecutiva del fascicolo. Evidenzia fatti, parti, valore economico e nodi critici."))
+        if doc_timeline: selected.append(("Timeline", "Crea una Timeline Cronologica rigorosa. Colonne: Data | Evento | Rif. Doc."))
+        # Gruppo 2
+        if doc_attacco: selected.append(("Punti_Attacco", "Elenca i Punti di Attacco tecnici contro la CTU e la controparte. Cita norme UNI/Leggi."))
+        if doc_nota: selected.append(("Analisi_Critica_Nota", "Analizza la nota avversaria. Dai un voto 1-10. Evidenzia le debolezze."))
+        if doc_quesiti: selected.append(("Quesiti_CTU", "Prepara una lista di Quesiti e Osservazioni pungenti da porre al CTU in udienza per metterlo in difficoltà."))
+        if doc_replica: selected.append(("Nota_Replica", "RISCRIVI la nota del nostro avvocato in versione ottimizzata e aggressiva (o diplomatica in base alla postura)."))
+        # Gruppo 3
+        if doc_strategia: selected.append(("Strategia_Processuale", "Definisci la Strategia Processuale. Cita cifre, rischi e prossime mosse (Next Best Action)."))
+        if doc_matrice: selected.append(("Matrice_Rischi", "Crea una Matrice dei Rischi (Tabella). Scenari: Vittoria Totale, Transazione, Sconfitta. Probabilità % e Impatto €."))
+        if doc_transazione: selected.append(("Bozza_Transazione", "Redigi una Bozza di Proposta Transattiva formale 'a saldo e stralcio', senza riconoscimento di debito."))
         
         if selected and (is_admin or "session_id" in st.query_params):
-            if st.button("🚀 Genera Documenti"):
+            st.divider()
+            if st.button("🚀 Genera Documenti Selezionati"):
                 parts_dossier, _ = prepara_input_gemini(uploaded_files)
                 st.session_state.generated_docs = {}
                 
@@ -332,7 +345,12 @@ with tab3:
         
         if st.session_state.generated_docs:
             st.divider()
+            st.write("### 📥 Scarica i tuoi documenti")
             cols = st.columns(len(st.session_state.generated_docs))
             for i, (k, v) in enumerate(st.session_state.generated_docs.items()):
-                with cols[i]:
+                # Gestione colonne dinamica se ci sono tanti documenti
+                col_idx = i % 4 
+                if i % 4 == 0: cols = st.columns(4)
+                
+                with cols[col_idx]:
                     st.download_button(f"📥 {k}", v["data"], v["name"], v["mime"])
