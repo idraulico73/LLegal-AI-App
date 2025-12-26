@@ -12,17 +12,58 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from fpdf import FPDF
 
-# --- CONFIGURAZIONE PAGINA ---
-st.set_page_config(page_title="GemKick Legal (Rev 36 - Chat Fix)", layout="wide", page_icon="⚖️")
+# --- BRANDING & CONFIGURAZIONE GLOBALE ---
+APP_NAME = "LexVantage"
+APP_SUBTITLE = "Ingegneria Forense & Strategia Processuale"
+APP_VERSION = "v1.1 (Stable)"
+APP_ICON = "⚖️"
 
-# --- CSS MIGLIORATO ---
+st.set_page_config(
+    page_title=f"{APP_NAME} - {APP_SUBTITLE}", 
+    layout="wide", 
+    page_icon=APP_ICON
+)
+
+# --- CSS MIGLIORATO (STILE PREMIUM) ---
 st.markdown("""
 <style>
-    .stButton>button { width: 100%; border-radius: 5px; height: 3em; font-weight: bold; }
-    .chat-message { padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; display: flex; align-items: flex-start; gap: 10px; }
-    .chat-message.user { background-color: #f0f2f6; }
-    .chat-message.bot { background-color: #ffffff; border: 1px solid #e0e0e0; }
-    .status-box { padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 5px solid #3498db; background-color: #e8f4f8; }
+    /* Stile Bottoni */
+    .stButton>button { 
+        width: 100%; 
+        border-radius: 6px; 
+        height: 3.5em; 
+        font-weight: 600; 
+        text-transform: uppercase; 
+        letter-spacing: 0.5px;
+        transition: all 0.3s ease;
+    }
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+    
+    /* Stile Chat */
+    .chat-message { 
+        padding: 1.2rem; 
+        border-radius: 8px; 
+        margin-bottom: 1rem; 
+        display: flex; 
+        align-items: flex-start; 
+        gap: 15px; 
+        font-family: 'Source Sans Pro', sans-serif;
+    }
+    .chat-message.user { background-color: #f0f2f6; border-left: 4px solid #95a5a6; }
+    .chat-message.bot { background-color: #ffffff; border: 1px solid #e0e0e0; border-left: 4px solid #3498db; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    
+    /* Stile Supervisor */
+    .status-box { 
+        padding: 15px; 
+        border-radius: 8px; 
+        margin-bottom: 20px; 
+        border-left: 5px solid #2ecc71; 
+        background-color: #eafaf1; 
+        color: #27ae60;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -39,7 +80,7 @@ try:
     
     available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
     
-    # Priority List
+    # Priority List (Smart & Fast)
     priority_smart = ["models/gemini-1.5-pro", "models/gemini-1.5-pro-latest", "models/gemini-1.0-pro"]
     priority_fast = ["models/gemini-1.5-flash", "models/gemini-1.5-flash-latest", "models/gemini-1.5-flash-001"]
 
@@ -72,9 +113,9 @@ if "doc_queue" not in st.session_state: st.session_state.doc_queue = []
 if "supervisor_history" not in st.session_state: st.session_state.supervisor_history = []
 if "generated_docs" not in st.session_state: st.session_state.generated_docs = {}
 
-# --- PROMPT LIBRARY ---
+# --- PROMPT LIBRARY (STRATEGIA COMMERCIALE) ---
 DOC_PROMPTS = {
-    "Sintesi_Esecutiva": "TASK: 1. TIMELINE NARRATIVA (Causa->Effetto). 2. SINTESI ESECUTIVA (Numeri Chiave).",
+    "Sintesi_Esecutiva": "TASK: 1. TIMELINE NARRATIVA (Causa->Effetto). 2. SINTESI ESECUTIVA (Numeri Chiave, Decisioni Urgenti).",
     "Timeline": "Crea una Timeline Cronologica rigorosa. Evidenzia in GRASSETTO le date critiche.",
     "Punti_Attacco": "Elenca i Punti di Attacco tecnici. Usa i dati del calcolatore per dimostrare l'errore di stima.",
     "Analisi_Critica_Nota": "Analizza la nota avversaria. Evidenzia le contraddizioni logiche e tecniche.",
@@ -122,7 +163,7 @@ def create_word_table(doc, table_lines):
 def markdown_to_docx_advanced(text, title):
     doc = Document()
     doc.add_heading(title, 0).alignment = WD_ALIGN_PARAGRAPH.CENTER
-    doc.add_paragraph(f"Generato il: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    doc.add_paragraph(f"Documento generato da {APP_NAME} il: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     lines = text.split('\n')
     table_lines, in_table = [], False
     for line in lines:
@@ -166,7 +207,7 @@ def prepara_input_gemini(uploaded_files):
         except Exception as e: st.error(f"Errore {file.name}: {e}")
     return input_parts, log
 
-# --- FUNZIONI CORE ---
+# --- FUNZIONI CORE (FIXED) ---
 
 def check_sufficiency(context_parts, doc_queue, history):
     if not HAS_KEY or not FAST_MODEL: return "READY", ""
@@ -175,54 +216,58 @@ def check_sufficiency(context_parts, doc_queue, history):
     context_str = "".join(text_context)[:30000]
     docs_to_gen = ", ".join([d[0] for d in doc_queue])
     hist_txt = "\n".join([f"{r}: {m}" for r, m in history])
-    prompt = f"SEI UN SUPERVISORE. Doc da fare: {docs_to_gen}.\nCONTESTO: {context_str}\nSTORICO: {hist_txt}\nMancano dati CRITICI? Se sì, fai 1 domanda. Se no, rispondi READY."
+    prompt = f"SEI IL SUPERVISORE DI {APP_NAME}. Doc da fare: {docs_to_gen}.\nCONTESTO: {context_str}\nSTORICO: {hist_txt}\nMancano dati CRITICI? Se sì, fai 1 domanda. Se no, rispondi READY."
     try:
         res = model.generate_content(prompt).text.strip()
         return ("READY", "") if "READY" in res.upper() else ("ASK", res)
     except: return "READY", ""
 
-# NUOVA FUNZIONE SOLO PER LA CHAT (TAB 2)
 def genera_risposta_chat(prompt_utente, context_parts, history):
     if not HAS_KEY or not ACTIVE_MODEL: return "ERRORE: Modello non disponibile."
-    model = genai.GenerativeModel(ACTIVE_MODEL)
+    
+    # SYSTEM PROMPT PER CHAT (NO TABELLE)
+    sys_prompt = """
+    SEI UN CONSULENTE DI LEXVANTAGE.
+    REGOLE TASSATIVE PER LA CHAT:
+    1. NON USARE MAI TABELLE MARKDOWN (usa elenchi puntati o numerati).
+    2. Sii sintetico, strategico e diretto.
+    3. Usa grassetti per evidenziare i concetti chiave.
+    """
+    
+    # Inizializzo il modello CON le istruzioni di sistema (FIX REV 38)
+    model = genai.GenerativeModel(ACTIVE_MODEL, system_instruction=sys_prompt)
     
     chat_ctx = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in history if m['role'] == 'user'])
-    
-    # Prompt specifico per evitare tabelle e layout rotti
-    sys_prompt = """
-    SEI UN ASSISTENTE LEGALE ESPERTO E DIRETTO.
-    REGOLE TASSATIVE PER LA CHAT:
-    1. NON USARE MAI TABELLE MARKDOWN (si leggono male in chat).
-    2. Usa elenchi puntati (*), grassetti e spaziature per strutturare i dati.
-    3. Sii sintetico e vai dritto al punto.
-    4. Usa un tono professionale ma discorsivo.
-    """
     
     payload = list(context_parts)
     payload.append(f"\nINFO PREGRESSE:\n{chat_ctx}\n\nDOMANDA UTENTE: {prompt_utente}")
     
-    try:
-        res = model.generate_content(payload)
-        return res.text # Qui non puliamo i saluti, è una chat!
+    try: return model.generate_content(payload).text
     except Exception as e: return f"Errore: {e}"
 
-# FUNZIONE PER I DOCUMENTI (TAB 3 - MANTIENE TABELLE)
 def genera_documento_finale(nome_doc, prompt_speciale, context_parts, postura_val, dati_calc, history):
     if not HAS_KEY or not ACTIVE_MODEL: return "ERRORE: Modello non disponibile."
-    model = genai.GenerativeModel(ACTIVE_MODEL)
     
     if postura_val <= 3: post_desc = "DIPLOMATICA/SOFT"
     elif postura_val <= 7: post_desc = "FERMA/PROFESSIONALE"
     else: post_desc = "AGGRESSIVA/NUCLEAR"
     
+    # SYSTEM PROMPT PER DOCUMENTI (SI TABELLE)
+    sys_prompt = f"""
+    SEI L'AI DI {APP_NAME}, STRATEGA FORENSE SENIOR. POSTURA: {post_desc}.
+    DATI CALCOLATORE: {dati_calc}
+    REGOLE DOC:
+    1. NO SALUTI O PREMESSE.
+    2. USA MARKDOWN AVANZATO.
+    3. USA TABELLE MARKDOWN (| Col1 | Col2 |) per i dati numerici.
+    ISTRUZIONE SPECIFICA: {prompt_speciale}
+    """
+    
+    # Inizializzo il modello CON le istruzioni di sistema (FIX REV 38)
+    model = genai.GenerativeModel(ACTIVE_MODEL, system_instruction=sys_prompt)
+    
     chat_ctx = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in history if m['role'] == 'user'])
     
-    sys_prompt = f"""
-    SEI GEMINI, STRATEGA FORENSE SENIOR. POSTURA: {post_desc}.
-    DATI CALCOLATORE: {dati_calc}
-    REGOLE DOC: NO SALUTI. USA MARKDOWN. USA TABELLE MARKDOWN (|...|).
-    ISTRUZIONE: {prompt_speciale}
-    """
     payload = list(context_parts)
     payload.append(f"\nINFO EXTRA:\n{chat_ctx}\nGENERA DOC.")
     
@@ -233,16 +278,20 @@ def genera_documento_finale(nome_doc, prompt_speciale, context_parts, postura_va
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.image("https://upload.wikimedia.org/wikipedia/commons/8/8a/Google_Gemini_logo.svg", width=150)
+    st.markdown(f"## {APP_ICON} {APP_NAME}")
+    st.caption(f"{APP_SUBTITLE} - {APP_VERSION}")
+    st.divider()
+    
     st.markdown("### ⚙️ Configurazione")
     if HAS_KEY: st.success(STATUS_TEXT)
     else: st.error("⚠️ Verifica API Key")
+    
     postura_level = st.slider("Aggressività", 1, 10, 7)
     formato_output = st.radio("Output:", ["Word", "PDF"])
 
 # --- MAIN LAYOUT ---
-st.title("⚖️ GemKick Legal Suite (Rev 36)")
-st.caption("Auto-Discovery + Chat Fix + Supervisor")
+st.title(f"{APP_ICON} {APP_NAME}")
+st.subheader("Dashboard Strategica")
 
 tab1, tab2, tab3 = st.tabs(["🏠 Calcolatore", "💬 Chat & Upload", "📄 Generazione Documenti"])
 
@@ -270,26 +319,25 @@ with tab1:
             st.session_state.dati_calcolatore = f"VALORE BASE: €{valore_base}\nCOEFFICIENTI:\n{det}VALORE FINALE: €{v_fin}"
             st.success(f"Valore Netto: € {v_fin:,.2f}"); st.caption("Dati in memoria AI.")
 
-# TAB 2: UPLOAD & CHAT (CORRETTO)
+# TAB 2: UPLOAD & CHAT
 with tab2:
-    st.write("### 1. Caricamento")
-    uploaded_files = st.file_uploader("Fascicolo (PDF, IMG, TXT)", accept_multiple_files=True)
+    st.write("### 1. Caricamento Fascicolo")
+    uploaded_files = st.file_uploader("Trascina qui i file", accept_multiple_files=True)
     parts_dossier = []
     if uploaded_files:
         parts_dossier, log = prepara_input_gemini(uploaded_files)
         with st.expander("Log File"): st.text(log)
     
-    st.divider(); st.write("### 2. Chat")
+    st.divider(); st.write("### 2. Chat Strategica")
     for msg in st.session_state.messages:
         role = "user" if msg["role"] == "user" else "bot"
         icon = "👤" if msg["role"] == "user" else "🤖"
         st.markdown(f"<div class='chat-message {role}'><b>{icon}:</b> {msg['content']}</div>", unsafe_allow_html=True)
     
-    if prompt := st.chat_input("Chiedi all'AI..."):
+    if prompt := st.chat_input("Chiedi a LexVantage..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"): st.write(prompt)
-        with st.spinner("Analisi..."):
-            # USA LA NUOVA FUNZIONE SPECIFICA PER LA CHAT
+        with st.spinner("Analisi in corso..."):
             risposta = genera_risposta_chat(prompt, parts_dossier, st.session_state.messages)
             st.session_state.messages.append({"role": "assistant", "content": risposta})
             st.rerun()
@@ -298,14 +346,16 @@ with tab2:
 with tab3:
     if not uploaded_files: st.warning("⚠️ Carica file nel Tab 2.")
     else:
-        st.header("🛒 Generazione")
+        st.header("🛒 Generazione Documenti")
         c1, c2 = st.columns(2)
         with c1:
+            st.caption("ANALISI & ATTACCO")
             d1 = st.checkbox("Sintesi_Esecutiva")
             d2 = st.checkbox("Timeline")
             d3 = st.checkbox("Punti_Attacco")
             d4 = st.checkbox("Quesiti_CTU")
         with c2:
+            st.caption("STRATEGIA & CHIUSURA")
             d5 = st.checkbox("Strategia_Processuale")
             d6 = st.checkbox("Matrice_Rischi")
             d7 = st.checkbox("Bozza_Transazione")
@@ -329,16 +379,13 @@ with tab3:
             st.session_state.supervisor_history = []
             st.rerun()
             
-        # LOOP SUPERVISOR
         if st.session_state.doc_queue and not st.session_state.ready_to_generate:
             st.markdown("---")
             if not st.session_state.sufficiency_check:
                 with st.spinner("🕵️‍♂️ Supervisor attivo..."):
                     status, msg = check_sufficiency(parts_dossier, st.session_state.doc_queue, st.session_state.supervisor_history)
-                    if status == "READY":
-                        st.session_state.ready_to_generate = True
-                    else:
-                        st.session_state.supervisor_history.append({"role": "assistant", "content": msg})
+                    if status == "READY": st.session_state.ready_to_generate = True
+                    else: st.session_state.supervisor_history.append({"role": "assistant", "content": msg})
                     st.session_state.sufficiency_check = True
                     st.rerun()
             
@@ -360,7 +407,6 @@ with tab3:
                         else: st.session_state.supervisor_history.append({"role": "assistant", "content": nxt})
                 st.rerun()
 
-        # GENERAZIONE FINALE
         if st.session_state.ready_to_generate and st.session_state.doc_queue:
             st.markdown("---")
             prog = st.progress(0)
@@ -379,9 +425,8 @@ with tab3:
                 prog.progress((i+1)/len(st.session_state.doc_queue))
             st.session_state.doc_queue = []; st.session_state.ready_to_generate = False; st.session_state.sufficiency_check = False; st.rerun()
 
-        # DOWNLOAD
         if st.session_state.generated_docs:
-            st.write("### 📥 Download")
+            st.write("### 📥 Download Documenti")
             cols = st.columns(3)
             for i, (k, v) in enumerate(st.session_state.generated_docs.items()):
                 with cols[i % 3]: st.download_button(f"Scarica {k}", v["data"], f"{k}.{v['ext']}", v["mime"])
