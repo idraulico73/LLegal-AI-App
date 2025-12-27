@@ -21,12 +21,9 @@ APP_VER = "Rev 44 (Universal Core - Multi-Practice)"
 
 st.set_page_config(page_title=APP_NAME, layout="wide", page_icon="⚖️")
 
-# CSS: Layout Professionale Neutro
+# SOSTITUISCI IL BLOCCO CSS CON QUESTO:
 st.markdown("""
 <style>
-    /* Input Chat sempre in basso */
-    .stChatInput { position: fixed; bottom: 0; padding-bottom: 20px; z-index: 100; background: white; }
-    
     /* Stile Messaggi */
     div[data-testid="stChatMessage"] { 
         background-color: #f8f9fa; 
@@ -323,14 +320,18 @@ with t2:
     if full_txt and st.session_state.nome_fascicolo == "Fascicolo":
         st.session_state.nome_fascicolo = detect_case_name(full_txt[:2000])
 
-    # CONTAINER STORICO
+# CONTAINER STORICO (VERSIONE FIXATA)
     msg_container = st.container()
     with msg_container:
         if not st.session_state.messages:
             st.info("Carica i documenti della causa per iniziare.")
+        
         for m in st.session_state.messages:
             with st.chat_message(m["role"]):
-                st.markdown(m["content"].replace("|", " - "))
+                # FIX CRASH: Assicuriamo che content sia stringa
+                content_safe = str(m.get("content", "")) 
+                if content_safe == "None": content_safe = ""
+                st.markdown(content_safe.replace("|", " - "))
 
     # LOGICA INTERVISTA (Auto-Run)
     should_run_interview = False
@@ -353,14 +354,19 @@ with t2:
         st.session_state.contesto_chat_text += f"\nUser: {prompt}"
         st.rerun()
 
-    # RISPOSTA STANDARD
+# RISPOSTA STANDARD (VERSIONE FIXATA)
     if last_role == "user" and st.session_state.intervista_fatta:
         with st.chat_message("assistant"):
             with st.spinner("Elaborazione..."):
                 last_msg = st.session_state.messages[-1]["content"]
                 json_out = interroga_gemini_json(last_msg, st.session_state.contesto_chat_text, parts, st.session_state.livello_aggressivita, False)
-                cont = json_out.get("contenuto", "Errore")
-                st.markdown(cont.replace("|", " - "))
+                
+                # FIX CRASH: Gestione robusta del None
+                cont = json_out.get("contenuto", "")
+                if cont is None: cont = "L'AI non ha generato contenuto testuale."
+                
+                st.markdown(str(cont).replace("|", " - ")) # Force string
+                
                 st.session_state.messages.append({"role":"assistant", "content":cont})
                 st.session_state.contesto_chat_text += f"\nAI: {cont}"
 
@@ -425,3 +431,4 @@ with t3:
         cols = st.columns(4)
         for k, v in st.session_state.generated_docs.items():
             st.download_button(f"📥 {k}", v["data"], f"{k}.{v['ext']}")
+
