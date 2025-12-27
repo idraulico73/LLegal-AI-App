@@ -10,11 +10,17 @@ from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from fpdf import FPDF
-from supabase import create_client, Client
+
+# Tenta di importare Supabase, se manca usa modalità offline
+try:
+    from supabase import create_client, Client
+    SUPABASE_AVAILABLE = True
+except ImportError:
+    SUPABASE_AVAILABLE = False
 
 # --- CONFIGURAZIONE APP ---
 APP_NAME = "LexVantage"
-APP_VER = "Rev 45 (Privacy Shield + DB Connected)"
+APP_VER = "Rev 45.1 (Privacy Shield + Fallback Mode)"
 st.set_page_config(page_title=APP_NAME, layout="wide", page_icon="⚖️")
 
 # --- CSS & UI ---
@@ -31,28 +37,36 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- INIZIALIZZAZIONE SUPABASE ---
+# --- INIZIALIZZAZIONE SUPABASE (CON DEBUG) ---
 @st.cache_resource
 def init_supabase():
+    if not SUPABASE_AVAILABLE:
+        return None, "Libreria 'supabase' non installata."
+    
     try:
+        # Verifica se i secrets esistono
+        if "supabase" not in st.secrets:
+            return None, "Sezione [supabase] mancante in secrets.toml"
+            
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
-        return create_client(url, key)
+        
+        # Test connessione immediato
+        client = create_client(url, key)
+        return client, None
     except Exception as e:
-        st.error(f"Errore connessione DB: {e}")
-        return None
+        return None, str(e)
 
-supabase = init_supabase()
+supabase, db_error = init_supabase()
 
-# --- CLASSE PRIVACY SHIELD (ANONIMIZZATORE) ---
+# --- CLASSE PRIVACY SHIELD ---
 class DataSanitizer:
     def __init__(self):
-        self.mapping = {} # Mappa originale -> anonimo
-        self.reverse_mapping = {} # Anonimo -> originale
+        self.mapping = {} 
+        self.reverse_mapping = {} 
         self.counter = 1
         
     def add_entity(self, real_name, role_label):
-        """Registra un nome da proteggere"""
         if real_name and real_name not in self.mapping:
             fake = f"[{role_label}_{self.counter}]"
             self.mapping[real_name] = fake
@@ -60,71 +74,64 @@ class DataSanitizer:
             self.counter += 1
             
     def sanitize(self, text):
-        """Sostituisce i dati sensibili con placeholder"""
         clean_text = text
-        # 1. Mascheramento Email e Codici Fiscali (Regex base)
         clean_text = re.sub(r'[\w\.-]+@[\w\.-]+', '[EMAIL_PROTETTA]', clean_text)
         clean_text = re.sub(r'[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]', '[CF_OSCURATO]', clean_text)
-        
-        # 2. Mascheramento Nomi Specifici
         for real, fake in self.mapping.items():
             clean_text = clean_text.replace(real, fake)
-            # Gestisce anche il case-insensitive parziale
             clean_text = clean_text.replace(real.upper(), fake)
-            
         return clean_text
         
     def restore(self, text):
-        """Ripristina i nomi reali nei documenti finali"""
         if not text: return ""
         restored = text
         for fake, real in self.reverse_mapping.items():
             restored = restored.replace(fake, real)
         return restored
 
-# Inizializza Sanitizer in Session State
-if "sanitizer" not in st.session_state:
-    st.session_state.sanitizer = DataSanitizer()
+if "sanitizer" not in st.session_state: st.session_state.sanitizer = DataSanitizer()
 
 # --- STATE MANAGEMENT ---
 if "messages" not in st.session_state: st.session_state.messages = []
 if "contesto_chat_text" not in st.session_state: st.session_state.contesto_chat_text = ""
 if "dati_calcolatore" not in st.session_state: st.session_state.dati_calcolatore = "Nessun calcolo."
 if "generated_docs" not in st.session_state: st.session_state.generated_docs = {} 
-if "current_studio_id" not in st.session_state: st.session_state.current_studio_id = None
+if "current_studio_id" not in st.session_state: st.session_state.current_studio_id = "local_demo"
 if "intervista_fatta" not in st.session_state: st.session_state.intervista_fatta = False
 
 # --- SETUP AI ---
+HAS_KEY = False
 try:
+    # Supporto per doppia configurazione (Globale o Annidata)
     if "GOOGLE_API_KEY" in st.secrets:
-        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+        GENAI_KEY = st.secrets["GOOGLE_API_KEY"]
+    elif "google" in st.secrets:
+        GENAI_KEY = st.secrets["google"]["api_key"]
     else:
-        # Fallback per secrets annidati
-        genai.configure(api_key=st.secrets["google"]["api_key"])
-except:
-    st.warning("Chiave Google non trovata nei secrets.")
+        GENAI_KEY = None
+
+    if GENAI_KEY:
+        genai.configure(api_key=GENAI_KEY)
+        HAS_KEY = True
+except Exception as e:
+    st.error(f"Errore Chiave AI: {e}")
 
 def get_ai_model():
     return genai.GenerativeModel("models/gemini-1.5-flash")
 
-# --- FUNZIONI CORE (FIXATE) ---
-
+# --- FUNZIONI CORE (Parse, Files, AI) ---
 def parse_markdown_pro(doc, text):
-    """Parser Universale Blindato"""
     if text is None: return 
     text = str(text)
     if not text.strip(): return
-
     lines = text.split('\n')
     iterator = iter(lines)
     in_table = False
     table_data = []
-    
     style = doc.styles['Normal']
     style.font.name = 'Arial'
     style.font.size = Pt(11)
     style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-
     for line in iterator:
         stripped = line.strip()
         if "|" in stripped and len(stripped) > 2 and stripped.startswith("|"):
@@ -174,7 +181,6 @@ def get_file_content(uploaded_files):
     full_text = ""
     parts.append("FASCICOLO:\n")
     if not uploaded_files: return [], ""
-    
     for file in uploaded_files:
         try:
             safe = file.name.replace("|", "_")
@@ -185,42 +191,33 @@ def get_file_content(uploaded_files):
             elif "word" in file.type:
                 doc = Document(file)
                 txt = "\n".join([p.text for p in doc.paragraphs])
-            
             parts.append(f"\n--- FILE: {safe} ---\n{txt}")
             full_text += txt
         except: pass
     return parts, full_text
 
 def interroga_gemini_json(prompt, contesto, input_parts, aggressivita, force_interview=False):
-    # Logica Anonimizzazione
+    if not HAS_KEY: return {"titolo": "Errore", "contenuto": "Manca API Key Google nei secrets."}
+    
     sanitizer = st.session_state.sanitizer
     prompt_safe = sanitizer.sanitize(prompt)
     contesto_safe = sanitizer.sanitize(contesto)
     
-    # Sanitizzazione Input Documentale (Mockup - in prod andrebbe fatto sui file reali)
-    # Per ora puliamo solo il prompt e il contesto chat.
-    
-    mood = "Tecnico/Formale"
-    if aggressivita > 7: mood = "AGGRESSIVO (Legal Warfare)"
-    elif aggressivita < 4: mood = "DIPLOMATICO (Mediazione)"
+    mood = "Tecnico"
+    if aggressivita > 7: mood = "AGGRESSIVO"
+    elif aggressivita < 4: mood = "DIPLOMATICO"
 
     sys = f"""
-    SEI UN CONSULENTE LEGALE AI. MOOD: {mood}.
+    SEI UN LEGAL AI ASSISTANT. MOOD: {mood}.
     OUTPUT: SOLO JSON {{ "titolo": "...", "contenuto": "..." }}.
-    NOTA PRIVACY: I nomi sono stati sostituiti con etichette (es. [CLIENTE_1]). 
-    NON INVENTARE NOMI REALI. Usa le etichette fornite.
-    
+    NOTA: Usa i placeholder [CLIENTE_1] etc. se presenti.
     DATI: {st.session_state.dati_calcolatore}
     STORICO: {contesto_safe}
     """
     
-    payload = list(input_parts) # Attenzione: qui passiamo i file raw. 
-    # TODO: In Fase 2 avanzata, implementare OCR + Sanitize sui PDF prima di inviarli.
-    
+    payload = list(input_parts)
     final_prompt = f"UTENTE: '{prompt_safe}'. Genera JSON."
-    if force_interview:
-        final_prompt += " IGNORA RISPOSTA DIRETTA. Genera 3 domande strategiche."
-        
+    if force_interview: final_prompt += " IGNORA RISPOSTA DIRETTA. Genera 3 domande strategiche."
     payload.append(final_prompt)
     
     try:
@@ -228,14 +225,12 @@ def interroga_gemini_json(prompt, contesto, input_parts, aggressivita, force_int
         resp = model.generate_content(payload, generation_config={"response_mime_type": "application/json"})
         return json.loads(resp.text)
     except Exception as e:
-        return {"titolo": "Errore", "contenuto": str(e)}
+        return {"titolo": "Errore AI", "contenuto": str(e)}
 
 def crea_output_file(json_data, formato):
     raw_content = json_data.get("contenuto", "")
     if raw_content is None: testo = "Nessun contenuto."
     else: testo = str(raw_content)
-    
-    # REVERSE ANONYMIZATION: Ripristina i nomi veri nel documento finale
     testo_reale = st.session_state.sanitizer.restore(testo)
     titolo = json_data.get("titolo", "Doc")
     
@@ -260,7 +255,6 @@ def crea_output_file(json_data, formato):
         buf.write(pdf.output(dest='S').encode('latin-1'))
         mime = "application/pdf"
         ext = "pdf"
-        
     buf.seek(0)
     return buf, mime, ext
 
@@ -274,45 +268,49 @@ def crea_zip(docs):
     buf.seek(0)
     return buf
 
-# --- UI SIDEBAR: LOGIN STUDIO ---
+# --- UI SIDEBAR ---
 with st.sidebar:
     st.title(APP_NAME)
-    st.caption(f"{APP_VER}")
+    st.caption(APP_VER)
     
+    # SETUP DB CON FALLBACK
     st.divider()
-    st.subheader("🔐 Accesso Studio")
+    st.subheader("🔐 Accesso")
     
-    # Caricamento Studi da DB Supabase
-    studi_db = []
+    studi_options = {}
+    
     if supabase:
         try:
+            # Prova a leggere dal DB
             res = supabase.table("studi_legali").select("*").execute()
-            studi_db = res.data
-        except: st.error("DB Offline")
+            studi_data = res.data
+            studi_options = {s['nome_studio']: s['id'] for s in studi_data}
+            st.success("✅ DB Connesso")
+        except Exception as e:
+            st.warning(f"⚠️ Errore Query DB: {e}")
+            studi_options = {"Modalità Offline (Locale)": "local_demo"}
+    else:
+        st.error(f"❌ DB Offline: {db_error}")
+        studi_options = {"Modalità Offline (Locale)": "local_demo"}
         
-    opts = {s['nome_studio']: s['id'] for s in studi_db}
-    sel_studio = st.selectbox("Seleziona Studio", list(opts.keys()) if opts else ["Demo Local"])
-    
-    if sel_studio != "Demo Local":
-        st.session_state.current_studio_id = opts[sel_studio]
-        st.success(f"Connesso: {sel_studio}")
-    
+    sel_studio = st.selectbox("Seleziona Studio", list(studi_options.keys()))
+    st.session_state.current_studio_id = studi_options[sel_studio]
+
     st.divider()
-    
-    # CONFIGURAZIONE PRIVACY
-    st.subheader("🛡️ Privacy Shield")
-    n1 = st.text_input("Nome Cliente (da proteggere)", "Leonardo Cavalaglio")
-    n2 = st.text_input("Nome Controparte (da proteggere)", "Castillo Medina")
-    if st.button("Attiva Protezione Dati"):
+    # PRIVACY
+    st.subheader("🛡️ Privacy")
+    n1 = st.text_input("Nome Cliente", "Leonardo Cavalaglio")
+    n2 = st.text_input("Nome Controparte", "Castillo Medina")
+    if st.button("Attiva Protezione"):
         st.session_state.sanitizer.add_entity(n1, "CLIENTE")
         st.session_state.sanitizer.add_entity(n2, "CONTROPARTE")
-        st.toast(f"Nomi mascherati come [CLIENTE_1] e [CONTROPARTE_1]", icon="🔒")
-
+        st.toast(f"Dati mascherati attivata.", icon="🔒")
+        
     st.divider()
     st.session_state.livello_aggressivita = st.slider("Aggressività", 1, 10, 5)
 
-# --- MAIN TABS ---
-t1, t2, t3 = st.tabs(["🧮 Calcolatore", "💬 Analisi Sicura", "📦 Generatore"])
+# --- MAIN UI ---
+t1, t2, t3 = st.tabs(["🧮 Calcolatore", "💬 Analisi", "📦 Generatore"])
 
 with t1:
     st.header("Calcolatore Differenziale")
@@ -326,12 +324,11 @@ with t1:
         st.success("Salvato.")
 
 with t2:
-    st.info("I documenti inviati all'AI verranno processati secondo la Privacy Policy (No-Training). I nomi nel prompt sono anonimizzati.")
     files = st.file_uploader("Fascicolo", accept_multiple_files=True)
     parts, full_txt = get_file_content(files)
     
-    # Auto-Salvataggio Metadati su Supabase (Audit)
-    if files and st.session_state.current_studio_id:
+    # Audit Log (Solo se DB connesso)
+    if files and supabase and st.session_state.current_studio_id != "local_demo":
          if "log_sent" not in st.session_state:
              try:
                  supabase.table("fascicoli").insert({
@@ -340,51 +337,39 @@ with t2:
                      "stato": "in_lavorazione"
                  }).execute()
                  st.session_state.log_sent = True
-                 st.toast("Fascicolo registrato nel DB in Europa 🇪🇺", icon="cloud")
-             except Exception as e: st.warning(f"Err DB: {e}")
+                 st.toast("Audit salvato su DB", icon="cloud")
+             except: pass
 
-    # CHAT UI
     msg_container = st.container()
     with msg_container:
         for m in st.session_state.messages:
             with st.chat_message(m["role"]):
-                content_safe = str(m.get("content", ""))
-                # Mostriamo all'utente il testo RIPRISTINATO (leggibile), ma internamente l'AI ha lavorato su quello anonimo
-                st.markdown(content_safe.replace("|", " - "))
+                st.markdown(str(m.get("content", "")).replace("|", " - "))
 
     prompt = st.chat_input("Richiesta...")
     if prompt:
         st.session_state.messages.append({"role":"user", "content":prompt})
-        
-        # Logica Intervista Automatica
         force_interview = False
         if not st.session_state.intervista_fatta and len(st.session_state.messages) < 3:
             force_interview = True
             st.session_state.intervista_fatta = True
             
-        with st.spinner("Analisi in corso (Server EU)..."):
+        with st.spinner("Elaborazione..."):
             json_out = interroga_gemini_json(prompt, st.session_state.contesto_chat_text, parts, st.session_state.livello_aggressivita, force_interview)
-            cont = json_out.get("contenuto", "Errore generazione")
-            
-            # Quando l'AI risponde, potrebbe usare [CLIENTE_1]. Noi lo ripristiniamo per l'utente.
+            cont = json_out.get("contenuto", "Errore")
             cont_readable = st.session_state.sanitizer.restore(str(cont))
-            
             st.session_state.messages.append({"role":"assistant", "content":cont_readable})
-            st.session_state.contesto_chat_text += f"\nAI: {cont}" # Salviamo la storia raw
+            st.session_state.contesto_chat_text += f"\nAI: {cont}"
             st.rerun()
 
 with t3:
     st.header("Generazione Atti")
     fmt = st.radio("Formato", ["Word", "PDF"])
-    
     tasks = {
-        "Sintesi": "Crea Sintesi Esecutiva.",
-        "Timeline": "Crea Timeline Cronologica.",
-        "Matrice_Rischi": "Crea Matrice Rischi.",
-        "Punti_Attacco": "Crea Punti di Attacco tecnici.",
+        "Sintesi": "Crea Sintesi Esecutiva.", "Timeline": "Crea Timeline Cronologica.",
+        "Matrice_Rischi": "Crea Matrice Rischi.", "Punti_Attacco": "Crea Punti di Attacco tecnici.",
         "Nota_Difensiva": "Redigi Nota Difensiva completa."
     }
-    
     selected_docs = []
     cols = st.columns(3)
     for i, (key, val) in enumerate(tasks.items()):
@@ -395,7 +380,6 @@ with t3:
         parts, _ = get_file_content(files)
         st.session_state.generated_docs = {}
         bar = st.progress(0)
-        
         for i, (name, prompt_task) in enumerate(selected_docs):
             j = interroga_gemini_json(prompt_task, st.session_state.contesto_chat_text, parts, 5, False)
             d, m, e = crea_output_file(j, fmt)
@@ -403,6 +387,5 @@ with t3:
             bar.progress((i+1)/len(selected_docs))
             
     if st.session_state.generated_docs:
-        st.success("Documenti pronti con Nomi Reali ripristinati.")
         zip_data = crea_zip(st.session_state.generated_docs)
-        st.download_button("📦 SCARICA ZIP", zip_data, "Fascicolo_Completo.zip", "application/zip", type="primary")
+        st.download_button("📦 SCARICA ZIP", zip_data, "Fascicolo.zip", "application/zip", type="primary")
