@@ -1,7 +1,7 @@
 streamlit
-google-generativeai>=0.7.0
+google-generativeai
 pypdf
 python-docx
 fpdf
-pillow
 supabase
+gotrue
