@@ -4,3 +4,4 @@ pypdf
 python-docx
 fpdf
 pillow
+supabase
