@@ -198,24 +198,59 @@ def get_file_content(uploaded_files):
         except: pass
     return parts, full_text
 
-def interroga_gemini_json(prompt, contesto, input_parts, aggressivita, force_interview=False):
-    if not HAS_KEY or not active_model: return {"titolo": "Errore", "contenuto": "AI Offline o Modello non trovato."}
+# --- AGGIUNGI QUESTA FUNZIONE DI PULIZIA ---
+def clean_json_text(text):
+    """Pulisce l'output dell'AI da Markdown e caratteri illegali per il JSON"""
+    # 1. Rimuove i blocchi markdown ```json ... ```
+    text = re.sub(r'```json\s*', '', text)
+    text = re.sub(r'```', '', text)
     
-    # PRIVACY LAYER
+    # 2. Rimuove eventuali commenti o testo fuori dal JSON (cerca la prima { e l'ultima })
+    start = text.find('{')
+    end = text.rfind('}')
+    if start != -1 and end != -1:
+        text = text[start:end+1]
+        
+    # 3. Gestione caratteri di controllo (Newline non escapati)
+    # Spesso l'AI va a capo dentro le stringhe. Proviamo a sanificare.
+    # (Questa è una regex semplificata, per casi gravi serve un parser permissivo)
+    return text.strip()
+
+# --- AGGIUNGI QUESTA FUNZIONE DI PULIZIA ---
+def clean_json_text(text):
+    """Pulisce l'output dell'AI da Markdown e caratteri illegali per il JSON"""
+    # 1. Rimuove i blocchi markdown ```json ... ```
+    text = re.sub(r'```json\s*', '', text)
+    text = re.sub(r'```', '', text)
+    
+    # 2. Rimuove eventuali commenti o testo fuori dal JSON (cerca la prima { e l'ultima })
+    start = text.find('{')
+    end = text.rfind('}')
+    if start != -1 and end != -1:
+        text = text[start:end+1]
+        
+    # 3. Gestione caratteri di controllo (Newline non escapati)
+    # Spesso l'AI va a capo dentro le stringhe. Proviamo a sanificare.
+    # (Questa è una regex semplificata, per casi gravi serve un parser permissivo)
+    return text.strip()
+
+# --- SOSTITUISCI LA FUNZIONE INTERROGAZIONE ---
+def interroga_gemini_json(prompt, contesto, input_parts, aggressivita, force_interview=False):
+    if not HAS_KEY or not active_model: return {"titolo": "Errore", "contenuto": "AI Offline."}
+    
     sanitizer = st.session_state.sanitizer
     prompt_safe = sanitizer.sanitize(prompt)
     contesto_safe = sanitizer.sanitize(contesto)
     
     mood = "Tecnico"
-    if aggressivita > 7: mood = "AGGRESSIVO"
+    if aggressivita > 7: mood = "ESTREMAMENTE AGGRESSIVO (Legal Warfare)" # Forziamo il mood
     elif aggressivita < 4: mood = "DIPLOMATICO"
 
     sys = f"""
     SEI UN LEGAL AI ASSISTANT. MOOD: {mood}.
-    OUTPUT: SOLO JSON {{ "titolo": "...", "contenuto": "..." }}.
-    NOTA: Usa i placeholder [CLIENTE_1] etc. se presenti.
-    DATI: {st.session_state.dati_calcolatore}
-    STORICO: {contesto_safe}
+    OBBIETTIVO: {st.session_state.dati_calcolatore}
+    OUTPUT: SOLO JSON VALIDISSIMO (senza commenti, senza markdown).
+    SCHEMA: {{ "titolo": "...", "contenuto": "..." }}
     """
     
     payload = list(input_parts)
@@ -224,12 +259,17 @@ def interroga_gemini_json(prompt, contesto, input_parts, aggressivita, force_int
     payload.append(final_prompt)
     
     try:
-        # USA IL MODELLO TROVATO DINAMICAMENTE
         model = genai.GenerativeModel(active_model, system_instruction=sys, generation_config={"response_mime_type": "application/json"})
         resp = model.generate_content(payload)
-        return json.loads(resp.text)
+        
+        # --- FIX APPLICATO QUI ---
+        cleaned_text = clean_json_text(resp.text)
+        # strict=False permette caratteri di controllo come \n dentro le stringhe
+        return json.loads(cleaned_text, strict=False) 
+        
     except Exception as e:
-        return {"titolo": "Errore AI", "contenuto": str(e)}
+        # Fallback: se fallisce il JSON, restituisce il testo grezzo come contenuto
+        return {"titolo": "Errore Parsing (Raw Text Recupertato)", "contenuto": f"L'AI ha risposto ma il formato non era valido. Ecco il testo grezzo:\n\n{resp.text if 'resp' in locals() else str(e)}"}
 
 def crea_output_file(json_data, formato):
     raw_content = json_data.get("contenuto", "")
@@ -412,3 +452,4 @@ with t3:
         # NOME DINAMICO RIPRISTINATO
         nome_zip = f"Fascicolo_{st.session_state.nome_fascicolo.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.zip"
         st.download_button("📦 SCARICA ZIP", zip_data, nome_zip, "application/zip", type="primary")
+
