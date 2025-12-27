@@ -453,3 +453,4 @@ with t3:
         nome_zip = f"Fascicolo_{st.session_state.nome_fascicolo.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.zip"
         st.download_button("📦 SCARICA ZIP", zip_data, nome_zip, "application/zip", type="primary")
 
+
