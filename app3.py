@@ -20,7 +20,7 @@ except ImportError:
 
 # --- CONFIGURAZIONE APP ---
 APP_NAME = "LexVantage"
-APP_VER = "Rev 47 (Final Polished: Smart JSON + UX Fix)"
+APP_VER = "Rev 48 (Universal Translator: No More Raw Code)"
 st.set_page_config(page_title=APP_NAME, layout="wide", page_icon="⚖️")
 
 # --- CSS & UI ---
@@ -34,9 +34,7 @@ st.markdown("""
     h1, h2, h3 { color: #003366; }
     div.stButton > button { width: 100%; font-weight: 600; border-radius: 6px; }
     div.stButton > button:first-child { background-color: #004e92; color: white; }
-    /* Fix per rendere le tabelle leggibili nella chat */
-    div[data-testid="stMarkdownContainer"] table { width: 100%; border-collapse: collapse; }
-    div[data-testid="stMarkdownContainer"] th, td { border: 1px solid #ddd; padding: 8px; }
+    strong { color: #003366; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -127,14 +125,14 @@ def clean_json_text(text):
     """Pulisce l'output dell'AI da Markdown e caratteri illegali"""
     text = re.sub(r'```json\s*', '', text)
     text = re.sub(r'```', '', text)
-    start = text.find('[') # Cerca inizio lista
+    # Cerca graffe o quadre
+    start = -1
     start_obj = text.find('{')
+    start_arr = text.find('[')
     
-    # Se trova una lista prima di un oggetto, o se trova solo una lista
-    if start != -1 and (start_obj == -1 or start < start_obj):
-        pass # È probabilmente una lista
-    elif start_obj != -1:
-        start = start_obj # È un oggetto
+    if start_obj != -1 and start_arr != -1: start = min(start_obj, start_arr)
+    elif start_obj != -1: start = start_obj
+    elif start_arr != -1: start = start_arr
         
     end_list = text.rfind(']')
     end_obj = text.rfind('}')
@@ -142,6 +140,39 @@ def clean_json_text(text):
     
     if start != -1 and end != -1:
         text = text[start:end+1]
+    return text.strip()
+
+def universal_json_flattener(data, level=0):
+    """
+    Trasforma QUALSIASI struttura JSON (Dict, List, Nested) in Markdown leggibile.
+    Risolve il problema dei documenti con codice grezzo.
+    """
+    text = ""
+    indent = "  " * level
+    
+    if isinstance(data, dict):
+        # Se c'è un titolo e contenuto esplicito (struttura standard)
+        if "titolo" in data and "contenuto" in data and len(data) == 2:
+            return f"### {data['titolo']}\n\n{universal_json_flattener(data['contenuto'], level)}"
+            
+        for k, v in data.items():
+            key_clean = k.replace("_", " ").title()
+            if isinstance(v, (dict, list)):
+                text += f"\n{indent}**{key_clean}**:\n{universal_json_flattener(v, level+1)}"
+            else:
+                text += f"\n{indent}- **{key_clean}**: {v}"
+                
+    elif isinstance(data, list):
+        for item in data:
+            if isinstance(item, (dict, list)):
+                text += f"\n{indent}{universal_json_flattener(item, level+1)}"
+            else:
+                text += f"\n{indent}* {item}"
+                
+    else:
+        # È una stringa o numero
+        return str(data).replace("|", " - ") # Fix pipe table crash
+        
     return text.strip()
 
 def parse_markdown_pro(doc, text):
@@ -234,14 +265,14 @@ def interroga_gemini_json(prompt, contesto, input_parts, aggressivita, force_int
 
     sys = f"""
     SEI UN LEGAL AI ASSISTANT. MOOD: {mood}.
-    OUTPUT: JSON. Se ti vengono chieste più cose, usa una lista di oggetti.
+    OUTPUT: JSON.
     DATI: {st.session_state.dati_calcolatore}
     STORICO: {contesto_safe}
     """
     
     payload = list(input_parts)
     final_prompt = f"UTENTE: '{prompt_safe}'. Genera JSON {{'titolo': '...', 'contenuto': '...'}}."
-    if force_interview: final_prompt += " Rispondi con una lista di domande strategiche."
+    if force_interview: final_prompt += " È una fase preliminare: IGNORA richieste specifiche ora. Rispondi SOLO con una lista di 3 domande strategiche per inquadrare meglio il caso."
     payload.append(final_prompt)
     
     try:
@@ -249,39 +280,37 @@ def interroga_gemini_json(prompt, contesto, input_parts, aggressivita, force_int
         resp = model.generate_content(payload)
         cleaned_text = clean_json_text(resp.text)
         
-        # --- SMART PARSING: LIST vs DICT vs NESTED ---
+        # 1. Parsing JSON
         try:
             parsed = json.loads(cleaned_text, strict=False)
         except:
-            # Se fallisce il parsing stretto, prova a pulire caratteri di controllo
-            import ast
-            try:
-                parsed = ast.literal_eval(cleaned_text)
-            except:
-                return {"titolo": "Risposta (Raw)", "contenuto": cleaned_text}
+            return {"titolo": "Risposta", "contenuto": cleaned_text}
 
-        # Gestione LISTA (es. il caso che mi hai mandato)
-        if isinstance(parsed, list):
-            full_content = ""
-            for item in parsed:
-                t = item.get("titolo", "")
-                # Cerca il contenuto in vari campi possibili
-                c = item.get("contenuto") or item.get("risposta") or item.get("response") or str(item)
-                if t: full_content += f"### {t}\n"
-                full_content += f"{c}\n\n"
-            return {"titolo": "Analisi Strategica", "contenuto": full_content}
+        # 2. Universal Flattening (La Magia)
+        # Se è un dizionario standard {titolo, contenuto}, usalo.
+        # Altrimenti, appiattisci tutto in testo.
         
-        # Gestione DIZIONARIO ANNIDATO (es. caso Sintesi con "valori_calcolatore")
+        final_title = "Analisi"
+        final_content = ""
+        
         if isinstance(parsed, dict):
-            # Se manca la chiave "contenuto", probabile struttura annidata complessa
-            if "contenuto" not in parsed:
-                # Trasforma l'intero dizionario in testo leggibile Markdown
-                formatted_text = ""
-                for k, v in parsed.items():
-                    formatted_text += f"**{k.replace('_', ' ').title()}**:\n{v}\n\n"
-                return {"titolo": parsed.get("titolo", "Documento Generato"), "contenuto": formatted_text}
+            final_title = parsed.get("titolo", "Analisi AI")
+            raw_content = parsed.get("contenuto")
             
-        return parsed
+            if isinstance(raw_content, str):
+                final_content = raw_content
+            elif raw_content:
+                # Se il contenuto è un oggetto complesso, srotolalo
+                final_content = universal_json_flattener(raw_content)
+            else:
+                # Se non c'è chiave "contenuto", srotola tutto l'oggetto
+                final_content = universal_json_flattener(parsed)
+                
+        elif isinstance(parsed, list):
+            final_title = "Lista Elementi"
+            final_content = universal_json_flattener(parsed)
+            
+        return {"titolo": final_title, "contenuto": final_content}
         
     except Exception as e:
         return {"titolo": "Errore Tecnico", "contenuto": str(e)}
@@ -400,48 +429,56 @@ with t2:
                  st.session_state.log_sent = True
              except: pass
 
-    # RENDER CHAT HISTORY (No Rerun)
+    # RENDER CHAT HISTORY
     msg_container = st.container()
     with msg_container:
         for m in st.session_state.messages:
             with st.chat_message(m["role"]):
-                # Formattazione sicura
                 raw_c = m.get("content", "")
+                
+                # TITOLO IN GRASSETTO FIX
+                # Se c'è un titolo salvato nei metadati del messaggio, usalo
+                titolo = m.get("titolo_doc", "")
+                if titolo: st.markdown(f"### {titolo}")
+                
                 if isinstance(raw_c, str):
                     st.markdown(raw_c.replace("|", " - "))
-                elif isinstance(raw_c, dict):
-                    st.markdown(raw_c.get("contenuto", "").replace("|", " - "))
 
     # INPUT AREA
     prompt = st.chat_input("Scrivi qui...")
     if prompt:
-        # Aggiunta immediata
         st.session_state.messages.append({"role":"user", "content":prompt})
         with msg_container:
              with st.chat_message("user"):
                  st.markdown(prompt)
         
+        # INTERVISTA FORZATA
         force_interview = False
-        if not st.session_state.intervista_fatta and len(st.session_state.messages) < 4:
+        # Se è il primo o secondo messaggio E l'utente ha scritto poco (< 10 parole), forza l'intervista
+        # Se l'utente ha scritto un papiro (come il tuo prompt), l'AI risponde direttamente.
+        if not st.session_state.intervista_fatta and len(st.session_state.messages) < 4 and len(prompt.split()) < 20:
             force_interview = True
             st.session_state.intervista_fatta = True
             
         with st.spinner("L'AI sta ragionando..."):
             json_out = interroga_gemini_json(prompt, st.session_state.contesto_chat_text, parts, st.session_state.livello_aggressivita, force_interview)
             
-            # Gestione sicura output
-            if isinstance(json_out, dict):
-                cont = json_out.get("contenuto", str(json_out))
-            else:
-                cont = str(json_out)
+            # FLATTERING: Assicura che 'cont' sia sempre stringa Markdown
+            cont = json_out.get("contenuto", "Errore")
+            titolo_doc = json_out.get("titolo", "Analisi")
+            
+            if not isinstance(cont, str):
+                cont = universal_json_flattener(cont)
             
             cont_readable = st.session_state.sanitizer.restore(str(cont))
             
-            st.session_state.messages.append({"role":"assistant", "content":cont_readable})
+            # Salviamo anche il titolo nel messaggio per il rendering
+            st.session_state.messages.append({"role":"assistant", "content":cont_readable, "titolo_doc": titolo_doc})
             st.session_state.contesto_chat_text += f"\nAI: {cont}"
             
             with msg_container:
                 with st.chat_message("assistant"):
+                    st.markdown(f"### {titolo_doc}")
                     st.markdown(cont_readable.replace("|", " - "))
 
 with t3:
