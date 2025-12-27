@@ -20,7 +20,7 @@ except ImportError:
 
 # --- CONFIGURAZIONE APP ---
 APP_NAME = "LexVantage"
-APP_VER = "Rev 45.1 (Privacy Shield + Fallback Mode)"
+APP_VER = "Rev 46 (Final Merge: DB + Privacy + Full AI)"
 st.set_page_config(page_title=APP_NAME, layout="wide", page_icon="⚖️")
 
 # --- CSS & UI ---
@@ -37,25 +37,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- INIZIALIZZAZIONE SUPABASE (CON DEBUG) ---
+# --- INIZIALIZZAZIONE SUPABASE ---
 @st.cache_resource
 def init_supabase():
-    if not SUPABASE_AVAILABLE:
-        return None, "Libreria 'supabase' non installata."
-    
+    if not SUPABASE_AVAILABLE: return None, "Libreria mancante"
     try:
-        # Verifica se i secrets esistono
-        if "supabase" not in st.secrets:
-            return None, "Sezione [supabase] mancante in secrets.toml"
-            
+        if "supabase" not in st.secrets: return None, "Secrets mancanti"
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
-        
-        # Test connessione immediato
-        client = create_client(url, key)
-        return client, None
-    except Exception as e:
-        return None, str(e)
+        return create_client(url, key), None
+    except Exception as e: return None, str(e)
 
 supabase, db_error = init_supabase()
 
@@ -75,6 +66,7 @@ class DataSanitizer:
             
     def sanitize(self, text):
         clean_text = text
+        # Regex per Email e CF
         clean_text = re.sub(r'[\w\.-]+@[\w\.-]+', '[EMAIL_PROTETTA]', clean_text)
         clean_text = re.sub(r'[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]', '[CF_OSCURATO]', clean_text)
         for real, fake in self.mapping.items():
@@ -98,11 +90,12 @@ if "dati_calcolatore" not in st.session_state: st.session_state.dati_calcolatore
 if "generated_docs" not in st.session_state: st.session_state.generated_docs = {} 
 if "current_studio_id" not in st.session_state: st.session_state.current_studio_id = "local_demo"
 if "intervista_fatta" not in st.session_state: st.session_state.intervista_fatta = False
+if "nome_fascicolo" not in st.session_state: st.session_state.nome_fascicolo = "Nuovo_Caso"
 
-# --- SETUP AI ---
+# --- SETUP AI (REV 44 LOGIC: AUTO-DISCOVERY) ---
 HAS_KEY = False
+active_model = None
 try:
-    # Supporto per doppia configurazione (Globale o Annidata)
     if "GOOGLE_API_KEY" in st.secrets:
         GENAI_KEY = st.secrets["GOOGLE_API_KEY"]
     elif "google" in st.secrets:
@@ -113,14 +106,23 @@ try:
     if GENAI_KEY:
         genai.configure(api_key=GENAI_KEY)
         HAS_KEY = True
+        # AUTO-DISCOVERY DEL MODELLO (FIX PER ERRORE 404)
+        try:
+            models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            priority = ["models/gemini-1.5-flash", "models/gemini-1.5-pro", "models/gemini-1.5-pro-latest"]
+            for cand in priority:
+                if cand in models:
+                    active_model = cand
+                    break
+            if not active_model and models: active_model = models[0] # Fallback sul primo disponibile
+        except:
+            active_model = "models/gemini-1.5-flash" # Estremo tentativo
 except Exception as e:
     st.error(f"Errore Chiave AI: {e}")
 
-def get_ai_model():
-    return genai.GenerativeModel("models/gemini-1.5-flash")
-
-# --- FUNZIONI CORE (Parse, Files, AI) ---
+# --- FUNZIONI CORE ---
 def parse_markdown_pro(doc, text):
+    """Parser Blindato Anti-Crash"""
     if text is None: return 
     text = str(text)
     if not text.strip(): return
@@ -197,8 +199,9 @@ def get_file_content(uploaded_files):
     return parts, full_text
 
 def interroga_gemini_json(prompt, contesto, input_parts, aggressivita, force_interview=False):
-    if not HAS_KEY: return {"titolo": "Errore", "contenuto": "Manca API Key Google nei secrets."}
+    if not HAS_KEY or not active_model: return {"titolo": "Errore", "contenuto": "AI Offline o Modello non trovato."}
     
+    # PRIVACY LAYER
     sanitizer = st.session_state.sanitizer
     prompt_safe = sanitizer.sanitize(prompt)
     contesto_safe = sanitizer.sanitize(contesto)
@@ -221,8 +224,9 @@ def interroga_gemini_json(prompt, contesto, input_parts, aggressivita, force_int
     payload.append(final_prompt)
     
     try:
-        model = get_ai_model()
-        resp = model.generate_content(payload, generation_config={"response_mime_type": "application/json"})
+        # USA IL MODELLO TROVATO DINAMICAMENTE
+        model = genai.GenerativeModel(active_model, system_instruction=sys, generation_config={"response_mime_type": "application/json"})
+        resp = model.generate_content(payload)
         return json.loads(resp.text)
     except Exception as e:
         return {"titolo": "Errore AI", "contenuto": str(e)}
@@ -231,6 +235,7 @@ def crea_output_file(json_data, formato):
     raw_content = json_data.get("contenuto", "")
     if raw_content is None: testo = "Nessun contenuto."
     else: testo = str(raw_content)
+    # DE-ANONIMIZZAZIONE
     testo_reale = st.session_state.sanitizer.restore(testo)
     titolo = json_data.get("titolo", "Doc")
     
@@ -262,8 +267,10 @@ def crea_zip(docs):
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for n, info in docs.items():
+            # RIPRISTINATO NOME DINAMICO COMPLETO
+            cli = st.session_state.nome_fascicolo.replace(" ", "_")
             ts = datetime.now().strftime("%Y%m%d")
-            fname = f"{n}_{ts}.{info['ext']}"
+            fname = f"{n}_{cli}_{ts}.{info['ext']}"
             z.writestr(fname, info['data'].getvalue())
     buf.seek(0)
     return buf
@@ -273,31 +280,34 @@ with st.sidebar:
     st.title(APP_NAME)
     st.caption(APP_VER)
     
-    # SETUP DB CON FALLBACK
+    # STATUS AI
+    if HAS_KEY and active_model:
+        st.success(f"AI: {active_model}")
+    else:
+        st.error("AI: Disconnessa")
+
+    # SETUP DB
     st.divider()
     st.subheader("🔐 Accesso")
     
     studi_options = {}
-    
     if supabase:
         try:
-            # Prova a leggere dal DB
             res = supabase.table("studi_legali").select("*").execute()
             studi_data = res.data
             studi_options = {s['nome_studio']: s['id'] for s in studi_data}
             st.success("✅ DB Connesso")
         except Exception as e:
-            st.warning(f"⚠️ Errore Query DB: {e}")
-            studi_options = {"Modalità Offline (Locale)": "local_demo"}
+            st.warning("Modalità Offline (Cache)")
+            studi_options = {"Demo Local": "local_demo"}
     else:
-        st.error(f"❌ DB Offline: {db_error}")
-        studi_options = {"Modalità Offline (Locale)": "local_demo"}
+        studi_options = {"Demo Local": "local_demo"}
         
     sel_studio = st.selectbox("Seleziona Studio", list(studi_options.keys()))
     st.session_state.current_studio_id = studi_options[sel_studio]
 
     st.divider()
-    # PRIVACY
+    # PRIVACY UI
     st.subheader("🛡️ Privacy")
     n1 = st.text_input("Nome Cliente", "Leonardo Cavalaglio")
     n2 = st.text_input("Nome Controparte", "Castillo Medina")
@@ -308,6 +318,7 @@ with st.sidebar:
         
     st.divider()
     st.session_state.livello_aggressivita = st.slider("Aggressività", 1, 10, 5)
+    st.session_state.nome_fascicolo = st.text_input("Rif. Fascicolo", st.session_state.nome_fascicolo)
 
 # --- MAIN UI ---
 t1, t2, t3 = st.tabs(["🧮 Calcolatore", "💬 Analisi", "📦 Generatore"])
@@ -327,7 +338,7 @@ with t2:
     files = st.file_uploader("Fascicolo", accept_multiple_files=True)
     parts, full_txt = get_file_content(files)
     
-    # Audit Log (Solo se DB connesso)
+    # Audit Log
     if files and supabase and st.session_state.current_studio_id != "local_demo":
          if "log_sent" not in st.session_state:
              try:
@@ -365,27 +376,39 @@ with t2:
 with t3:
     st.header("Generazione Atti")
     fmt = st.radio("Formato", ["Word", "PDF"])
-    tasks = {
-        "Sintesi": "Crea Sintesi Esecutiva.", "Timeline": "Crea Timeline Cronologica.",
-        "Matrice_Rischi": "Crea Matrice Rischi.", "Punti_Attacco": "Crea Punti di Attacco tecnici.",
-        "Nota_Difensiva": "Redigi Nota Difensiva completa."
-    }
-    selected_docs = []
-    cols = st.columns(3)
-    for i, (key, val) in enumerate(tasks.items()):
-        with cols[i % 3]:
-            if st.checkbox(key): selected_docs.append((key, val))
+    
+    # RIPRISTINATI TUTTI E 9 I DOCUMENTI
+    col_a, col_b, col_c = st.columns(3)
+    tasks = []
+    
+    with col_a:
+        st.markdown("**Analisi & Sintesi**")
+        if st.checkbox("Sintesi Esecutiva"): tasks.append(("Sintesi", "Crea una Sintesi Esecutiva del caso. REQ: Box iniziale con i Valori del Calcolatore. Usa Bullet Points semaforici."))
+        if st.checkbox("Timeline Cronologica"): tasks.append(("Timeline", "Crea una Timeline rigorosa degli eventi. REQ: Calcola il tempo trascorso tra le date chiave."))
+        if st.checkbox("Matrice dei Rischi"): tasks.append(("Matrice_Rischi", "Crea una Matrice dei Rischi. REQ: Tabella con colonne Evento, Probabilità, Impatto Economico. Riga Totale in fondo."))
+    with col_b:
+        st.markdown("**Tecnica & Difesa**")
+        if st.checkbox("Punti di Attacco"): tasks.append(("Punti_Attacco", "Elenca i Punti di Attacco Tecnici/Legali. REQ: Cita precisamente i documenti (Pagina X). Usa i dati del Calcolatore."))
+        if st.checkbox("Analisi Critica"): tasks.append(("Analisi_Critica", "Analizza criticamente le tesi/documenti avversari. REQ: Tono fermo/aggressivo se richiesto."))
+        if st.checkbox("Quesiti Tecnici"): tasks.append(("Quesiti_Tecnici", "Formula Quesiti Tecnici o per il CTU. REQ: Domande numerate, senza preamboli."))
+    with col_c:
+        st.markdown("**Strategia & Chiusura**")
+        if st.checkbox("Nota Difensiva"): tasks.append(("Nota_Difensiva", "Redigi una Nota Difensiva/Replica completa. REQ: Integra i calcoli economici e le contestazioni tecniche."))
+        if st.checkbox("Strategia"): tasks.append(("Strategia", "Definisci la Strategia. REQ: Confronta Scenario A (Accordo) vs Scenario B (Contenzioso) con costi stimati."))
+        if st.checkbox("Bozza Accordo"): tasks.append(("Bozza_Accordo", "Redigi una Bozza di Accordo/Transazione. REQ: Inserisci clausola di validità temporale dell'offerta."))
             
-    if st.button("GENERA DOCUMENTI"):
+    if st.button("GENERA FASCICOLO COMPLETO"):
         parts, _ = get_file_content(files)
         st.session_state.generated_docs = {}
         bar = st.progress(0)
-        for i, (name, prompt_task) in enumerate(selected_docs):
+        for i, (name, prompt_task) in enumerate(tasks):
             j = interroga_gemini_json(prompt_task, st.session_state.contesto_chat_text, parts, 5, False)
             d, m, e = crea_output_file(j, fmt)
             st.session_state.generated_docs[name] = {"data":d, "mime":m, "ext":e}
-            bar.progress((i+1)/len(selected_docs))
+            bar.progress((i+1)/len(tasks))
             
     if st.session_state.generated_docs:
         zip_data = crea_zip(st.session_state.generated_docs)
-        st.download_button("📦 SCARICA ZIP", zip_data, "Fascicolo.zip", "application/zip", type="primary")
+        # NOME DINAMICO RIPRISTINATO
+        nome_zip = f"Fascicolo_{st.session_state.nome_fascicolo.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.zip"
+        st.download_button("📦 SCARICA ZIP", zip_data, nome_zip, "application/zip", type="primary")
