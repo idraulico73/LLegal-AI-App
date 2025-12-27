@@ -20,7 +20,7 @@ except ImportError:
 
 # --- CONFIGURAZIONE APP ---
 APP_NAME = "LexVantage"
-APP_VER = "Rev 46 (Final Merge: DB + Privacy + Full AI)"
+APP_VER = "Rev 47 (Final Polished: Smart JSON + UX Fix)"
 st.set_page_config(page_title=APP_NAME, layout="wide", page_icon="⚖️")
 
 # --- CSS & UI ---
@@ -29,11 +29,14 @@ st.markdown("""
     div[data-testid="stChatMessage"] { 
         background-color: #f8f9fa; border-radius: 8px; padding: 15px; 
         border-left: 4px solid #004e92; margin-bottom: 10px;
+        font-family: 'Segoe UI', sans-serif;
     }
-    h1, h2, h3 { color: #003366; font-family: 'Segoe UI', sans-serif; }
+    h1, h2, h3 { color: #003366; }
     div.stButton > button { width: 100%; font-weight: 600; border-radius: 6px; }
     div.stButton > button:first-child { background-color: #004e92; color: white; }
-    .privacy-badge { background-color: #d4edda; color: #155724; padding: 5px 10px; border-radius: 15px; font-size: 0.8em; font-weight: bold; }
+    /* Fix per rendere le tabelle leggibili nella chat */
+    div[data-testid="stMarkdownContainer"] table { width: 100%; border-collapse: collapse; }
+    div[data-testid="stMarkdownContainer"] th, td { border: 1px solid #ddd; padding: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -66,7 +69,6 @@ class DataSanitizer:
             
     def sanitize(self, text):
         clean_text = text
-        # Regex per Email e CF
         clean_text = re.sub(r'[\w\.-]+@[\w\.-]+', '[EMAIL_PROTETTA]', clean_text)
         clean_text = re.sub(r'[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]', '[CF_OSCURATO]', clean_text)
         for real, fake in self.mapping.items():
@@ -92,7 +94,7 @@ if "current_studio_id" not in st.session_state: st.session_state.current_studio_
 if "intervista_fatta" not in st.session_state: st.session_state.intervista_fatta = False
 if "nome_fascicolo" not in st.session_state: st.session_state.nome_fascicolo = "Nuovo_Caso"
 
-# --- SETUP AI (REV 44 LOGIC: AUTO-DISCOVERY) ---
+# --- SETUP AI ---
 HAS_KEY = False
 active_model = None
 try:
@@ -106,7 +108,6 @@ try:
     if GENAI_KEY:
         genai.configure(api_key=GENAI_KEY)
         HAS_KEY = True
-        # AUTO-DISCOVERY DEL MODELLO (FIX PER ERRORE 404)
         try:
             models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
             priority = ["models/gemini-1.5-flash", "models/gemini-1.5-pro", "models/gemini-1.5-pro-latest"]
@@ -114,15 +115,37 @@ try:
                 if cand in models:
                     active_model = cand
                     break
-            if not active_model and models: active_model = models[0] # Fallback sul primo disponibile
+            if not active_model and models: active_model = models[0]
         except:
-            active_model = "models/gemini-1.5-flash" # Estremo tentativo
+            active_model = "models/gemini-1.5-flash"
 except Exception as e:
     st.error(f"Errore Chiave AI: {e}")
 
 # --- FUNZIONI CORE ---
+
+def clean_json_text(text):
+    """Pulisce l'output dell'AI da Markdown e caratteri illegali"""
+    text = re.sub(r'```json\s*', '', text)
+    text = re.sub(r'```', '', text)
+    start = text.find('[') # Cerca inizio lista
+    start_obj = text.find('{')
+    
+    # Se trova una lista prima di un oggetto, o se trova solo una lista
+    if start != -1 and (start_obj == -1 or start < start_obj):
+        pass # È probabilmente una lista
+    elif start_obj != -1:
+        start = start_obj # È un oggetto
+        
+    end_list = text.rfind(']')
+    end_obj = text.rfind('}')
+    end = max(end_list, end_obj)
+    
+    if start != -1 and end != -1:
+        text = text[start:end+1]
+    return text.strip()
+
 def parse_markdown_pro(doc, text):
-    """Parser Blindato Anti-Crash"""
+    """Parser Blindato"""
     if text is None: return 
     text = str(text)
     if not text.strip(): return
@@ -198,43 +221,6 @@ def get_file_content(uploaded_files):
         except: pass
     return parts, full_text
 
-# --- AGGIUNGI QUESTA FUNZIONE DI PULIZIA ---
-def clean_json_text(text):
-    """Pulisce l'output dell'AI da Markdown e caratteri illegali per il JSON"""
-    # 1. Rimuove i blocchi markdown ```json ... ```
-    text = re.sub(r'```json\s*', '', text)
-    text = re.sub(r'```', '', text)
-    
-    # 2. Rimuove eventuali commenti o testo fuori dal JSON (cerca la prima { e l'ultima })
-    start = text.find('{')
-    end = text.rfind('}')
-    if start != -1 and end != -1:
-        text = text[start:end+1]
-        
-    # 3. Gestione caratteri di controllo (Newline non escapati)
-    # Spesso l'AI va a capo dentro le stringhe. Proviamo a sanificare.
-    # (Questa è una regex semplificata, per casi gravi serve un parser permissivo)
-    return text.strip()
-
-# --- AGGIUNGI QUESTA FUNZIONE DI PULIZIA ---
-def clean_json_text(text):
-    """Pulisce l'output dell'AI da Markdown e caratteri illegali per il JSON"""
-    # 1. Rimuove i blocchi markdown ```json ... ```
-    text = re.sub(r'```json\s*', '', text)
-    text = re.sub(r'```', '', text)
-    
-    # 2. Rimuove eventuali commenti o testo fuori dal JSON (cerca la prima { e l'ultima })
-    start = text.find('{')
-    end = text.rfind('}')
-    if start != -1 and end != -1:
-        text = text[start:end+1]
-        
-    # 3. Gestione caratteri di controllo (Newline non escapati)
-    # Spesso l'AI va a capo dentro le stringhe. Proviamo a sanificare.
-    # (Questa è una regex semplificata, per casi gravi serve un parser permissivo)
-    return text.strip()
-
-# --- SOSTITUISCI LA FUNZIONE INTERROGAZIONE ---
 def interroga_gemini_json(prompt, contesto, input_parts, aggressivita, force_interview=False):
     if not HAS_KEY or not active_model: return {"titolo": "Errore", "contenuto": "AI Offline."}
     
@@ -243,39 +229,67 @@ def interroga_gemini_json(prompt, contesto, input_parts, aggressivita, force_int
     contesto_safe = sanitizer.sanitize(contesto)
     
     mood = "Tecnico"
-    if aggressivita > 7: mood = "ESTREMAMENTE AGGRESSIVO (Legal Warfare)" # Forziamo il mood
+    if aggressivita > 7: mood = "ESTREMAMENTE AGGRESSIVO (Legal Warfare)"
     elif aggressivita < 4: mood = "DIPLOMATICO"
 
     sys = f"""
     SEI UN LEGAL AI ASSISTANT. MOOD: {mood}.
-    OBBIETTIVO: {st.session_state.dati_calcolatore}
-    OUTPUT: SOLO JSON VALIDISSIMO (senza commenti, senza markdown).
-    SCHEMA: {{ "titolo": "...", "contenuto": "..." }}
+    OUTPUT: JSON. Se ti vengono chieste più cose, usa una lista di oggetti.
+    DATI: {st.session_state.dati_calcolatore}
+    STORICO: {contesto_safe}
     """
     
     payload = list(input_parts)
-    final_prompt = f"UTENTE: '{prompt_safe}'. Genera JSON."
-    if force_interview: final_prompt += " IGNORA RISPOSTA DIRETTA. Genera 3 domande strategiche."
+    final_prompt = f"UTENTE: '{prompt_safe}'. Genera JSON {{'titolo': '...', 'contenuto': '...'}}."
+    if force_interview: final_prompt += " Rispondi con una lista di domande strategiche."
     payload.append(final_prompt)
     
     try:
         model = genai.GenerativeModel(active_model, system_instruction=sys, generation_config={"response_mime_type": "application/json"})
         resp = model.generate_content(payload)
-        
-        # --- FIX APPLICATO QUI ---
         cleaned_text = clean_json_text(resp.text)
-        # strict=False permette caratteri di controllo come \n dentro le stringhe
-        return json.loads(cleaned_text, strict=False) 
+        
+        # --- SMART PARSING: LIST vs DICT vs NESTED ---
+        try:
+            parsed = json.loads(cleaned_text, strict=False)
+        except:
+            # Se fallisce il parsing stretto, prova a pulire caratteri di controllo
+            import ast
+            try:
+                parsed = ast.literal_eval(cleaned_text)
+            except:
+                return {"titolo": "Risposta (Raw)", "contenuto": cleaned_text}
+
+        # Gestione LISTA (es. il caso che mi hai mandato)
+        if isinstance(parsed, list):
+            full_content = ""
+            for item in parsed:
+                t = item.get("titolo", "")
+                # Cerca il contenuto in vari campi possibili
+                c = item.get("contenuto") or item.get("risposta") or item.get("response") or str(item)
+                if t: full_content += f"### {t}\n"
+                full_content += f"{c}\n\n"
+            return {"titolo": "Analisi Strategica", "contenuto": full_content}
+        
+        # Gestione DIZIONARIO ANNIDATO (es. caso Sintesi con "valori_calcolatore")
+        if isinstance(parsed, dict):
+            # Se manca la chiave "contenuto", probabile struttura annidata complessa
+            if "contenuto" not in parsed:
+                # Trasforma l'intero dizionario in testo leggibile Markdown
+                formatted_text = ""
+                for k, v in parsed.items():
+                    formatted_text += f"**{k.replace('_', ' ').title()}**:\n{v}\n\n"
+                return {"titolo": parsed.get("titolo", "Documento Generato"), "contenuto": formatted_text}
+            
+        return parsed
         
     except Exception as e:
-        # Fallback: se fallisce il JSON, restituisce il testo grezzo come contenuto
-        return {"titolo": "Errore Parsing (Raw Text Recupertato)", "contenuto": f"L'AI ha risposto ma il formato non era valido. Ecco il testo grezzo:\n\n{resp.text if 'resp' in locals() else str(e)}"}
+        return {"titolo": "Errore Tecnico", "contenuto": str(e)}
 
 def crea_output_file(json_data, formato):
     raw_content = json_data.get("contenuto", "")
     if raw_content is None: testo = "Nessun contenuto."
     else: testo = str(raw_content)
-    # DE-ANONIMIZZAZIONE
     testo_reale = st.session_state.sanitizer.restore(testo)
     titolo = json_data.get("titolo", "Doc")
     
@@ -307,9 +321,8 @@ def crea_zip(docs):
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for n, info in docs.items():
-            # RIPRISTINATO NOME DINAMICO COMPLETO
             cli = st.session_state.nome_fascicolo.replace(" ", "_")
-            ts = datetime.now().strftime("%Y%m%d")
+            ts = datetime.now().strftime("%Y%m%d_%H%M")
             fname = f"{n}_{cli}_{ts}.{info['ext']}"
             z.writestr(fname, info['data'].getvalue())
     buf.seek(0)
@@ -320,13 +333,11 @@ with st.sidebar:
     st.title(APP_NAME)
     st.caption(APP_VER)
     
-    # STATUS AI
     if HAS_KEY and active_model:
         st.success(f"AI: {active_model}")
     else:
         st.error("AI: Disconnessa")
 
-    # SETUP DB
     st.divider()
     st.subheader("🔐 Accesso")
     
@@ -337,8 +348,8 @@ with st.sidebar:
             studi_data = res.data
             studi_options = {s['nome_studio']: s['id'] for s in studi_data}
             st.success("✅ DB Connesso")
-        except Exception as e:
-            st.warning("Modalità Offline (Cache)")
+        except:
+            st.warning("Offline Mode")
             studi_options = {"Demo Local": "local_demo"}
     else:
         studi_options = {"Demo Local": "local_demo"}
@@ -347,14 +358,13 @@ with st.sidebar:
     st.session_state.current_studio_id = studi_options[sel_studio]
 
     st.divider()
-    # PRIVACY UI
     st.subheader("🛡️ Privacy")
     n1 = st.text_input("Nome Cliente", "Leonardo Cavalaglio")
     n2 = st.text_input("Nome Controparte", "Castillo Medina")
     if st.button("Attiva Protezione"):
         st.session_state.sanitizer.add_entity(n1, "CLIENTE")
         st.session_state.sanitizer.add_entity(n2, "CONTROPARTE")
-        st.toast(f"Dati mascherati attivata.", icon="🔒")
+        st.toast(f"Dati mascherati.", icon="🔒")
         
     st.divider()
     st.session_state.livello_aggressivita = st.slider("Aggressività", 1, 10, 5)
@@ -388,36 +398,56 @@ with t2:
                      "stato": "in_lavorazione"
                  }).execute()
                  st.session_state.log_sent = True
-                 st.toast("Audit salvato su DB", icon="cloud")
              except: pass
 
+    # RENDER CHAT HISTORY (No Rerun)
     msg_container = st.container()
     with msg_container:
         for m in st.session_state.messages:
             with st.chat_message(m["role"]):
-                st.markdown(str(m.get("content", "")).replace("|", " - "))
+                # Formattazione sicura
+                raw_c = m.get("content", "")
+                if isinstance(raw_c, str):
+                    st.markdown(raw_c.replace("|", " - "))
+                elif isinstance(raw_c, dict):
+                    st.markdown(raw_c.get("contenuto", "").replace("|", " - "))
 
-    prompt = st.chat_input("Richiesta...")
+    # INPUT AREA
+    prompt = st.chat_input("Scrivi qui...")
     if prompt:
+        # Aggiunta immediata
         st.session_state.messages.append({"role":"user", "content":prompt})
+        with msg_container:
+             with st.chat_message("user"):
+                 st.markdown(prompt)
+        
         force_interview = False
-        if not st.session_state.intervista_fatta and len(st.session_state.messages) < 3:
+        if not st.session_state.intervista_fatta and len(st.session_state.messages) < 4:
             force_interview = True
             st.session_state.intervista_fatta = True
             
-        with st.spinner("Elaborazione..."):
+        with st.spinner("L'AI sta ragionando..."):
             json_out = interroga_gemini_json(prompt, st.session_state.contesto_chat_text, parts, st.session_state.livello_aggressivita, force_interview)
-            cont = json_out.get("contenuto", "Errore")
+            
+            # Gestione sicura output
+            if isinstance(json_out, dict):
+                cont = json_out.get("contenuto", str(json_out))
+            else:
+                cont = str(json_out)
+            
             cont_readable = st.session_state.sanitizer.restore(str(cont))
+            
             st.session_state.messages.append({"role":"assistant", "content":cont_readable})
             st.session_state.contesto_chat_text += f"\nAI: {cont}"
-            st.rerun()
+            
+            with msg_container:
+                with st.chat_message("assistant"):
+                    st.markdown(cont_readable.replace("|", " - "))
 
 with t3:
     st.header("Generazione Atti")
     fmt = st.radio("Formato", ["Word", "PDF"])
     
-    # RIPRISTINATI TUTTI E 9 I DOCUMENTI
     col_a, col_b, col_c = st.columns(3)
     tasks = []
     
@@ -449,8 +479,5 @@ with t3:
             
     if st.session_state.generated_docs:
         zip_data = crea_zip(st.session_state.generated_docs)
-        # NOME DINAMICO RIPRISTINATO
-        nome_zip = f"Fascicolo_{st.session_state.nome_fascicolo.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.zip"
+        nome_zip = f"Fascicolo_{st.session_state.nome_fascicolo.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M')}.zip"
         st.download_button("📦 SCARICA ZIP", zip_data, nome_zip, "application/zip", type="primary")
-
-
