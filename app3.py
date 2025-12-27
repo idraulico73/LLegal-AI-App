@@ -93,7 +93,12 @@ def detect_case_name(text):
     return "Nuovo_Caso"
 
 def parse_markdown_pro(doc, text):
-    """Parser Universale per DOCX."""
+    """Parser Universale per DOCX - Versione Blindata Anti-Crash"""
+    # FIX SICUREZZA: Se il testo è None o vuoto, esce subito senza crashare
+    if text is None: return 
+    text = str(text) # Forza conversione in stringa
+    if not text.strip(): return
+
     lines = text.split('\n')
     iterator = iter(lines)
     in_table = False
@@ -148,7 +153,7 @@ def parse_markdown_pro(doc, text):
             p = doc.add_paragraph()
             content = stripped
 
-        # Bold
+        # Bold Parsing
         p.clear()
         parts = re.split(r'(\*\*.*?\*\*)', content)
         for part in parts:
@@ -229,8 +234,14 @@ def interroga_gemini_json(prompt, contesto, input_parts, aggressivita, force_int
         return {"titolo": "Errore", "contenuto": str(e)}
 
 def crea_output_file(json_data, formato):
-    testo = json_data.get("contenuto", "")
-    titolo = json_data.get("titolo", "Doc")
+    # FIX SICUREZZA: Gestione robusta del NoneType
+    raw_content = json_data.get("contenuto", "")
+    if raw_content is None: 
+        testo = "Nessun contenuto generato per questa sezione."
+    else:
+        testo = str(raw_content)
+        
+    titolo = json_data.get("titolo", "Documento Generato")
     
     if formato == "Word":
         doc = Document()
@@ -431,4 +442,5 @@ with t3:
         cols = st.columns(4)
         for k, v in st.session_state.generated_docs.items():
             st.download_button(f"📥 {k}", v["data"], f"{k}.{v['ext']}")
+
 
