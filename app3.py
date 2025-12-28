@@ -1,6 +1,11 @@
 import streamlit as st
 import json
 import re
+import stripe
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
 from datetime import datetime
 from io import BytesIO
 import zipfile
@@ -20,10 +25,10 @@ except ImportError:
 
 # --- CONFIGURAZIONE APP ---
 APP_NAME = "LexVantage"
-APP_VER = "Rev 48 (Universal Translator: No More Raw Code)"
+APP_VER = "Rev 50 (SaaS Complete: Privacy Shield + Payment)"
 st.set_page_config(page_title=APP_NAME, layout="wide", page_icon="⚖️")
 
-# --- CSS & UI ---
+# --- CSS & UI PREMIUM ---
 st.markdown("""
 <style>
     div[data-testid="stChatMessage"] { 
@@ -33,8 +38,8 @@ st.markdown("""
     }
     h1, h2, h3 { color: #003366; }
     div.stButton > button { width: 100%; font-weight: 600; border-radius: 6px; }
-    div.stButton > button:first-child { background-color: #004e92; color: white; }
-    strong { color: #003366; }
+    .premium-box { padding: 20px; border: 2px solid #ffd700; background-color: #fffdf0; border-radius: 10px; text-align: center; margin-top: 10px;}
+    .success-box { padding: 10px; border: 1px solid #28a745; background-color: #d4edda; color: #155724; border-radius: 5px; text-align: center; margin-bottom: 10px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -51,7 +56,7 @@ def init_supabase():
 
 supabase, db_error = init_supabase()
 
-# --- CLASSE PRIVACY SHIELD ---
+# --- CLASSE PRIVACY SHIELD (Dalla Rev 48) ---
 class DataSanitizer:
     def __init__(self):
         self.mapping = {} 
@@ -84,6 +89,7 @@ class DataSanitizer:
 if "sanitizer" not in st.session_state: st.session_state.sanitizer = DataSanitizer()
 
 # --- STATE MANAGEMENT ---
+if "user_status" not in st.session_state: st.session_state.user_status = "FREE"
 if "messages" not in st.session_state: st.session_state.messages = []
 if "contesto_chat_text" not in st.session_state: st.session_state.contesto_chat_text = ""
 if "dati_calcolatore" not in st.session_state: st.session_state.dati_calcolatore = "Nessun calcolo."
@@ -92,267 +98,186 @@ if "current_studio_id" not in st.session_state: st.session_state.current_studio_
 if "intervista_fatta" not in st.session_state: st.session_state.intervista_fatta = False
 if "nome_fascicolo" not in st.session_state: st.session_state.nome_fascicolo = "Nuovo_Caso"
 
-# --- SETUP AI ---
+# --- CONFIGURAZIONE SERVIZI ESTERNI (Rev 50) ---
 HAS_KEY = False
 active_model = None
-try:
-    if "GOOGLE_API_KEY" in st.secrets:
-        GENAI_KEY = st.secrets["GOOGLE_API_KEY"]
-    elif "google" in st.secrets:
-        GENAI_KEY = st.secrets["google"]["api_key"]
-    else:
-        GENAI_KEY = None
+PAYMENT_ENABLED = False
+EMAIL_ENABLED = False
 
-    if GENAI_KEY:
-        genai.configure(api_key=GENAI_KEY)
+try:
+    # 1. AI SETUP
+    if "GOOGLE_API_KEY" in st.secrets:
+        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
         HAS_KEY = True
+        active_model = "models/gemini-1.5-flash" # Default fallback
         try:
             models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            priority = ["models/gemini-1.5-flash", "models/gemini-1.5-pro", "models/gemini-1.5-pro-latest"]
-            for cand in priority:
-                if cand in models:
-                    active_model = cand
-                    break
-            if not active_model and models: active_model = models[0]
-        except:
-            active_model = "models/gemini-1.5-flash"
-except Exception as e:
-    st.error(f"Errore Chiave AI: {e}")
+            if "models/gemini-1.5-pro" in models: active_model = "models/gemini-1.5-pro"
+        except: pass
+    
+    # 2. STRIPE SETUP
+    if "stripe" in st.secrets:
+        stripe.api_key = st.secrets["stripe"]["secret_key"]
+        STRIPE_PUB_KEY = st.secrets["stripe"]["publishable_key"]
+        PAYMENT_ENABLED = True
 
-# --- FUNZIONI CORE ---
+    # 3. EMAIL SETUP
+    if "smtp" in st.secrets:
+        EMAIL_ENABLED = True
+        
+except Exception as e:
+    st.error(f"Errore Config: {e}")
+
+# --- FUNZIONI BACKEND (EMAIL & PAYMENTS) ---
+def invia_email(destinatario, oggetto, corpo, allegato_bytes=None, nome_allegato="doc.zip"):
+    if not EMAIL_ENABLED: return "Servizio Email non configurato"
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = st.secrets["smtp"]["email"]
+        msg['To'] = destinatario
+        msg['Subject'] = oggetto
+        msg.attach(MIMEText(corpo, 'plain'))
+        if allegato_bytes:
+            part = MIMEApplication(allegato_bytes.read(), Name=nome_allegato)
+            part['Content-Disposition'] = f'attachment; filename="{nome_allegato}"'
+            msg.attach(part)
+        server = smtplib.SMTP(st.secrets["smtp"]["server"], st.secrets["smtp"]["port"])
+        server.starttls()
+        server.login(st.secrets["smtp"]["email"], st.secrets["smtp"]["password"])
+        server.sendmail(st.secrets["smtp"]["email"], destinatario, msg.as_string())
+        server.quit()
+        return True
+    except Exception as e: return str(e)
+
+def crea_checkout_session():
+    if not PAYMENT_ENABLED: return "#"
+    try:
+        # Rileva URL base automaticamente (locale o cloud)
+        base_url = "http://localhost:8501" # Default locale
+        # Se siamo su Streamlit Cloud, l'URL cambia, ma per ora usiamo questo per test
+        
+        session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[{'price_data': {'currency': 'eur', 'product_data': {'name': 'LexVantage Premium'}, 'unit_amount': 4900}, 'quantity': 1}],
+            mode='payment',
+            success_url=base_url + "?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url=base_url,
+        )
+        return session.url
+    except Exception as e: return str(e)
+
+# Gestione Ritorno Stripe
+try:
+    qp = st.query_params
+    if "session_id" in qp and st.session_state.user_status == "FREE":
+        st.session_state.user_status = "PREMIUM"
+        st.balloons()
+        st.toast("Pagamento Confermato! Account Premium Attivo.", icon="💎")
+except: pass
+
+# --- FUNZIONI CORE AI (Dalla Rev 48) ---
 
 def clean_json_text(text):
-    """Pulisce l'output dell'AI da Markdown e caratteri illegali"""
     text = re.sub(r'```json\s*', '', text)
     text = re.sub(r'```', '', text)
-    # Cerca graffe o quadre
-    start = -1
-    start_obj = text.find('{')
-    start_arr = text.find('[')
-    
-    if start_obj != -1 and start_arr != -1: start = min(start_obj, start_arr)
-    elif start_obj != -1: start = start_obj
-    elif start_arr != -1: start = start_arr
-        
-    end_list = text.rfind(']')
-    end_obj = text.rfind('}')
-    end = max(end_list, end_obj)
-    
-    if start != -1 and end != -1:
-        text = text[start:end+1]
+    start = text.find('{'); end = text.rfind('}')
+    if start != -1 and end != -1: text = text[start:end+1]
     return text.strip()
 
 def universal_json_flattener(data, level=0):
-    """
-    Trasforma QUALSIASI struttura JSON (Dict, List, Nested) in Markdown leggibile.
-    Risolve il problema dei documenti con codice grezzo.
-    """
     text = ""
     indent = "  " * level
-    
     if isinstance(data, dict):
-        # Se c'è un titolo e contenuto esplicito (struttura standard)
         if "titolo" in data and "contenuto" in data and len(data) == 2:
             return f"### {data['titolo']}\n\n{universal_json_flattener(data['contenuto'], level)}"
-            
         for k, v in data.items():
             key_clean = k.replace("_", " ").title()
-            if isinstance(v, (dict, list)):
-                text += f"\n{indent}**{key_clean}**:\n{universal_json_flattener(v, level+1)}"
-            else:
-                text += f"\n{indent}- **{key_clean}**: {v}"
-                
+            if isinstance(v, (dict, list)): text += f"\n{indent}**{key_clean}**:\n{universal_json_flattener(v, level+1)}"
+            else: text += f"\n{indent}- **{key_clean}**: {v}"
     elif isinstance(data, list):
         for item in data:
-            if isinstance(item, (dict, list)):
-                text += f"\n{indent}{universal_json_flattener(item, level+1)}"
-            else:
-                text += f"\n{indent}* {item}"
-                
-    else:
-        # È una stringa o numero
-        return str(data).replace("|", " - ") # Fix pipe table crash
-        
+            if isinstance(item, (dict, list)): text += f"\n{indent}{universal_json_flattener(item, level+1)}"
+            else: text += f"\n{indent}* {item}"
+    else: return str(data).replace("|", " - ")
     return text.strip()
 
 def parse_markdown_pro(doc, text):
-    """Parser Blindato"""
-    if text is None: return 
-    text = str(text)
-    if not text.strip(): return
-    lines = text.split('\n')
-    iterator = iter(lines)
-    in_table = False
-    table_data = []
-    style = doc.styles['Normal']
-    style.font.name = 'Arial'
-    style.font.size = Pt(11)
-    style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    for line in iterator:
+    if not text: return
+    lines = str(text).split('\n')
+    in_table = False; table_data = []
+    for line in lines:
         stripped = line.strip()
         if "|" in stripped and len(stripped) > 2 and stripped.startswith("|"):
-            if not in_table:
-                in_table = True
-                table_data = []
+            if not in_table: in_table = True; table_data = []
             cells = [c.strip() for c in stripped.split('|')[1:-1]]
-            if all(set(c).issubset({'-', ':', ' '}) for c in cells if c): continue
-            table_data.append(cells)
+            if not all(set(c).issubset({'-', ':', ' '}) for c in cells if c): table_data.append(cells)
             continue
         if in_table:
             if table_data:
-                rows = len(table_data)
-                cols = max(len(r) for r in table_data) if rows > 0 else 0
+                rows = len(table_data); cols = max(len(r) for r in table_data) if rows > 0 else 0
                 if rows > 0 and cols > 0:
-                    table = doc.add_table(rows=rows, cols=cols)
-                    table.style = 'Table Grid'
-                    for r_idx, row_content in enumerate(table_data):
-                        for c_idx, cell_content in enumerate(row_content):
-                            if c_idx < cols:
-                                cell = table.cell(r_idx, c_idx)
-                                cell.text = cell_content
-            in_table = False
-            table_data = []
+                    tbl = doc.add_table(rows=rows, cols=cols); tbl.style = 'Table Grid'
+                    for i, r in enumerate(table_data):
+                        for j, c in enumerate(r): 
+                            if j < cols: tbl.cell(i, j).text = c
+            in_table = False; table_data = []
         if not stripped: continue
-        if stripped.startswith('#'):
-            level = stripped.count('#')
-            doc.add_heading(stripped.lstrip('#').strip().replace("**",""), level=min(level, 3))
-            continue
-        if stripped.startswith('- ') or stripped.startswith('* '):
-            p = doc.add_paragraph(style='List Bullet')
-            content = stripped[2:]
-        else:
-            p = doc.add_paragraph()
-            content = stripped
-        p.clear()
-        parts = re.split(r'(\*\*.*?\*\*)', content)
-        for part in parts:
-            if part.startswith('**') and part.endswith('**'):
-                run = p.add_run(part[2:-2])
-                run.bold = True
-            else:
-                p.add_run(part)
+        if stripped.startswith('#'): doc.add_heading(stripped.lstrip('#').strip().replace("**",""), level=min(stripped.count('#'), 3))
+        elif stripped.startswith('- ') or stripped.startswith('* '): doc.add_paragraph(stripped[2:], style='List Bullet')
+        else: doc.add_paragraph(stripped).alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 
 def get_file_content(uploaded_files):
-    parts = []
-    full_text = ""
-    parts.append("FASCICOLO:\n")
+    parts = []; full_text = ""; parts.append("FASCICOLO:\n")
     if not uploaded_files: return [], ""
     for file in uploaded_files:
         try:
             safe = file.name.replace("|", "_")
-            txt = ""
             if file.type == "application/pdf":
-                pdf = PdfReader(file)
-                for p in pdf.pages: txt += p.extract_text() + "\n"
+                pdf = PdfReader(file); txt = "".join([p.extract_text() for p in pdf.pages])
             elif "word" in file.type:
-                doc = Document(file)
-                txt = "\n".join([p.text for p in doc.paragraphs])
-            parts.append(f"\n--- FILE: {safe} ---\n{txt}")
-            full_text += txt
+                doc = Document(file); txt = "\n".join([p.text for p in doc.paragraphs])
+            else: txt = ""
+            if txt: parts.append(f"\n--- FILE: {safe} ---\n{txt}"); full_text += txt
         except: pass
     return parts, full_text
 
 def interroga_gemini_json(prompt, contesto, input_parts, aggressivita, force_interview=False):
-    if not HAS_KEY or not active_model: return {"titolo": "Errore", "contenuto": "AI Offline."}
-    
+    if not HAS_KEY: return {"titolo": "Errore", "contenuto": "AI Offline."}
     sanitizer = st.session_state.sanitizer
     prompt_safe = sanitizer.sanitize(prompt)
     contesto_safe = sanitizer.sanitize(contesto)
-    
-    mood = "Tecnico"
-    if aggressivita > 7: mood = "ESTREMAMENTE AGGRESSIVO (Legal Warfare)"
-    elif aggressivita < 4: mood = "DIPLOMATICO"
-
-    sys = f"""
-    SEI UN LEGAL AI ASSISTANT. MOOD: {mood}.
-    OUTPUT: JSON.
-    DATI: {st.session_state.dati_calcolatore}
-    STORICO: {contesto_safe}
-    """
-    
+    mood = "AGGRESSIVO" if aggressivita > 7 else "DIPLOMATICO"
+    sys = f"SEI UN LEGAL AI. MOOD: {mood}. OUTPUT: JSON. DATI: {st.session_state.dati_calcolatore}. STORICO: {contesto_safe}"
     payload = list(input_parts)
-    final_prompt = f"UTENTE: '{prompt_safe}'. Genera JSON {{'titolo': '...', 'contenuto': '...'}}."
-    if force_interview: final_prompt += " È una fase preliminare: IGNORA richieste specifiche ora. Rispondi SOLO con una lista di 3 domande strategiche per inquadrare meglio il caso."
-    payload.append(final_prompt)
-    
+    payload.append(f"UTENTE: '{prompt_safe}'. Genera JSON {{'titolo': '...', 'contenuto': '...'}}.")
     try:
         model = genai.GenerativeModel(active_model, system_instruction=sys, generation_config={"response_mime_type": "application/json"})
         resp = model.generate_content(payload)
-        cleaned_text = clean_json_text(resp.text)
+        cleaned = clean_json_text(resp.text)
+        try: parsed = json.loads(cleaned)
+        except: return {"titolo": "Risposta", "contenuto": cleaned}
         
-        # 1. Parsing JSON
-        try:
-            parsed = json.loads(cleaned_text, strict=False)
-        except:
-            return {"titolo": "Risposta", "contenuto": cleaned_text}
-
-        # 2. Universal Flattening (La Magia)
-        # Se è un dizionario standard {titolo, contenuto}, usalo.
-        # Altrimenti, appiattisci tutto in testo.
-        
-        final_title = "Analisi"
-        final_content = ""
-        
-        if isinstance(parsed, dict):
-            final_title = parsed.get("titolo", "Analisi AI")
-            raw_content = parsed.get("contenuto")
-            
-            if isinstance(raw_content, str):
-                final_content = raw_content
-            elif raw_content:
-                # Se il contenuto è un oggetto complesso, srotolalo
-                final_content = universal_json_flattener(raw_content)
-            else:
-                # Se non c'è chiave "contenuto", srotola tutto l'oggetto
-                final_content = universal_json_flattener(parsed)
-                
-        elif isinstance(parsed, list):
-            final_title = "Lista Elementi"
-            final_content = universal_json_flattener(parsed)
-            
-        return {"titolo": final_title, "contenuto": final_content}
-        
-    except Exception as e:
-        return {"titolo": "Errore Tecnico", "contenuto": str(e)}
+        final_content = parsed.get("contenuto", "")
+        if not isinstance(final_content, str): final_content = universal_json_flattener(final_content if final_content else parsed)
+        return {"titolo": parsed.get("titolo", "Analisi"), "contenuto": final_content}
+    except Exception as e: return {"titolo": "Errore", "contenuto": str(e)}
 
 def crea_output_file(json_data, formato):
-    raw_content = json_data.get("contenuto", "")
-    if raw_content is None: testo = "Nessun contenuto."
-    else: testo = str(raw_content)
-    testo_reale = st.session_state.sanitizer.restore(testo)
+    raw = json_data.get("contenuto", ""); testo = st.session_state.sanitizer.restore(str(raw))
     titolo = json_data.get("titolo", "Doc")
-    
     if formato == "Word":
-        doc = Document()
-        doc.add_heading(titolo, 0)
-        parse_markdown_pro(doc, testo_reale)
-        buf = BytesIO()
-        doc.save(buf)
-        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        ext = "docx"
+        doc = Document(); doc.add_heading(titolo, 0); parse_markdown_pro(doc, testo); buf = BytesIO(); doc.save(buf)
+        return buf, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"
     else:
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font("Arial", 'B', 14)
-        pdf.cell(0, 10, txt=titolo.encode('latin-1','replace').decode('latin-1'), ln=1, align='C')
-        pdf.ln(10)
-        pdf.set_font("Arial", size=11)
-        safe_tx = testo_reale.replace("€","EUR").encode('latin-1','replace').decode('latin-1')
-        pdf.multi_cell(0, 6, txt=safe_tx)
-        buf = BytesIO()
-        buf.write(pdf.output(dest='S').encode('latin-1'))
-        mime = "application/pdf"
-        ext = "pdf"
-    buf.seek(0)
-    return buf, mime, ext
+        pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", 'B', 14); pdf.cell(0, 10, titolo.encode('latin-1','replace').decode('latin-1'), ln=1, align='C')
+        pdf.set_font("Arial", size=11); pdf.multi_cell(0, 6, testo.encode('latin-1','replace').decode('latin-1'))
+        return BytesIO(pdf.output(dest='S').encode('latin-1')), "application/pdf", "pdf"
 
 def crea_zip(docs):
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for n, info in docs.items():
-            cli = st.session_state.nome_fascicolo.replace(" ", "_")
-            ts = datetime.now().strftime("%Y%m%d_%H%M")
-            fname = f"{n}_{cli}_{ts}.{info['ext']}"
+            fname = f"{n}_{st.session_state.nome_fascicolo.replace(' ', '_')}.{info['ext']}"
             z.writestr(fname, info['data'].getvalue())
     buf.seek(0)
     return buf
@@ -362,40 +287,31 @@ with st.sidebar:
     st.title(APP_NAME)
     st.caption(APP_VER)
     
-    if HAS_KEY and active_model:
-        st.success(f"AI: {active_model}")
+    # PREMIUM STATUS BOX
+    if st.session_state.user_status == "PREMIUM":
+        st.markdown("<div class='success-box'>💎 PREMIUM ACTIVE</div>", unsafe_allow_html=True)
     else:
-        st.error("AI: Disconnessa")
+        st.warning("Versione FREE")
+        if PAYMENT_ENABLED:
+            url = crea_checkout_session()
+            if "http" in url: st.link_button("🚀 Acquista Premium (€49)", url)
+            else: st.error(f"Err Payment: {url}")
+        else: st.info("Pagamenti Disabilitati (Configura Secrets)")
 
     st.divider()
-    st.subheader("🔐 Accesso")
+    if HAS_KEY: st.success(f"AI Online: {active_model}")
+    else: st.error("AI Offline")
     
-    studi_options = {}
-    if supabase:
-        try:
-            res = supabase.table("studi_legali").select("*").execute()
-            studi_data = res.data
-            studi_options = {s['nome_studio']: s['id'] for s in studi_data}
-            st.success("✅ DB Connesso")
-        except:
-            st.warning("Offline Mode")
-            studi_options = {"Demo Local": "local_demo"}
-    else:
-        studi_options = {"Demo Local": "local_demo"}
-        
-    sel_studio = st.selectbox("Seleziona Studio", list(studi_options.keys()))
-    st.session_state.current_studio_id = studi_options[sel_studio]
-
+    # PRIVACY
     st.divider()
-    st.subheader("🛡️ Privacy")
+    st.subheader("🛡️ Privacy Shield")
     n1 = st.text_input("Nome Cliente", "Leonardo Cavalaglio")
-    n2 = st.text_input("Nome Controparte", "Castillo Medina")
-    if st.button("Attiva Protezione"):
+    n2 = st.text_input("Controparte", "Castillo Medina")
+    if st.button("Maschera Dati"):
         st.session_state.sanitizer.add_entity(n1, "CLIENTE")
         st.session_state.sanitizer.add_entity(n2, "CONTROPARTE")
-        st.toast(f"Dati mascherati.", icon="🔒")
+        st.toast("Dati sensibili mascherati per l'AI.", icon="🔒")
         
-    st.divider()
     st.session_state.livello_aggressivita = st.slider("Aggressività", 1, 10, 5)
     st.session_state.nome_fascicolo = st.text_input("Rif. Fascicolo", st.session_state.nome_fascicolo)
 
@@ -411,68 +327,36 @@ with t1:
     note = st.text_area("Note Tecniche:")
     if st.button("Salva Dati"):
         st.session_state.dati_calcolatore = f"CTU: {val_a} | TARGET: {val_b} | DELTA: {delta}. Note: {note}"
-        st.success("Salvato.")
+        st.success("Dati iniettati nel contesto AI.")
 
 with t2:
     files = st.file_uploader("Fascicolo", accept_multiple_files=True)
     parts, full_txt = get_file_content(files)
     
-    # Audit Log
-    if files and supabase and st.session_state.current_studio_id != "local_demo":
-         if "log_sent" not in st.session_state:
-             try:
-                 supabase.table("fascicoli").insert({
-                     "studio_id": st.session_state.current_studio_id,
-                     "nome_riferimento": f"Analisi {datetime.now().strftime('%H:%M')}",
-                     "stato": "in_lavorazione"
-                 }).execute()
-                 st.session_state.log_sent = True
-             except: pass
-
-    # RENDER CHAT HISTORY
     msg_container = st.container()
     with msg_container:
         for m in st.session_state.messages:
             with st.chat_message(m["role"]):
-                raw_c = m.get("content", "")
-                
-                # TITOLO IN GRASSETTO FIX
-                # Se c'è un titolo salvato nei metadati del messaggio, usalo
                 titolo = m.get("titolo_doc", "")
                 if titolo: st.markdown(f"### {titolo}")
-                
-                if isinstance(raw_c, str):
-                    st.markdown(raw_c.replace("|", " - "))
+                if isinstance(m["content"], str): st.markdown(m["content"].replace("|", " - "))
 
-    # INPUT AREA
     prompt = st.chat_input("Scrivi qui...")
     if prompt:
         st.session_state.messages.append({"role":"user", "content":prompt})
         with msg_container:
-             with st.chat_message("user"):
-                 st.markdown(prompt)
+            with st.chat_message("user"): st.markdown(prompt)
         
-        # INTERVISTA FORZATA
         force_interview = False
-        # Se è il primo o secondo messaggio E l'utente ha scritto poco (< 10 parole), forza l'intervista
-        # Se l'utente ha scritto un papiro (come il tuo prompt), l'AI risponde direttamente.
         if not st.session_state.intervista_fatta and len(st.session_state.messages) < 4 and len(prompt.split()) < 20:
-            force_interview = True
-            st.session_state.intervista_fatta = True
+            force_interview = True; st.session_state.intervista_fatta = True
             
-        with st.spinner("L'AI sta ragionando..."):
+        with st.spinner("Elaborazione..."):
             json_out = interroga_gemini_json(prompt, st.session_state.contesto_chat_text, parts, st.session_state.livello_aggressivita, force_interview)
-            
-            # FLATTERING: Assicura che 'cont' sia sempre stringa Markdown
             cont = json_out.get("contenuto", "Errore")
             titolo_doc = json_out.get("titolo", "Analisi")
             
-            if not isinstance(cont, str):
-                cont = universal_json_flattener(cont)
-            
             cont_readable = st.session_state.sanitizer.restore(str(cont))
-            
-            # Salviamo anche il titolo nel messaggio per il rendering
             st.session_state.messages.append({"role":"assistant", "content":cont_readable, "titolo_doc": titolo_doc})
             st.session_state.contesto_chat_text += f"\nAI: {cont}"
             
@@ -484,37 +368,68 @@ with t2:
 with t3:
     st.header("Generazione Atti")
     fmt = st.radio("Formato", ["Word", "PDF"])
-    
     col_a, col_b, col_c = st.columns(3)
     tasks = []
     
     with col_a:
-        st.markdown("**Analisi & Sintesi**")
-        if st.checkbox("Sintesi Esecutiva"): tasks.append(("Sintesi", "Crea una Sintesi Esecutiva del caso. REQ: Box iniziale con i Valori del Calcolatore. Usa Bullet Points semaforici."))
-        if st.checkbox("Timeline Cronologica"): tasks.append(("Timeline", "Crea una Timeline rigorosa degli eventi. REQ: Calcola il tempo trascorso tra le date chiave."))
-        if st.checkbox("Matrice dei Rischi"): tasks.append(("Matrice_Rischi", "Crea una Matrice dei Rischi. REQ: Tabella con colonne Evento, Probabilità, Impatto Economico. Riga Totale in fondo."))
+        st.markdown("**Analisi**")
+        if st.checkbox("Sintesi Esecutiva"): tasks.append(("Sintesi", "Crea una Sintesi Esecutiva con Valori del Calcolatore."))
+        if st.checkbox("Timeline"): tasks.append(("Timeline", "Crea Timeline cronologica eventi."))
+        if st.checkbox("Matrice Rischi"): tasks.append(("Matrice_Rischi", "Crea Matrice Rischi (Evento, Probabilità, Impatto)."))
     with col_b:
-        st.markdown("**Tecnica & Difesa**")
-        if st.checkbox("Punti di Attacco"): tasks.append(("Punti_Attacco", "Elenca i Punti di Attacco Tecnici/Legali. REQ: Cita precisamente i documenti (Pagina X). Usa i dati del Calcolatore."))
-        if st.checkbox("Analisi Critica"): tasks.append(("Analisi_Critica", "Analizza criticamente le tesi/documenti avversari. REQ: Tono fermo/aggressivo se richiesto."))
-        if st.checkbox("Quesiti Tecnici"): tasks.append(("Quesiti_Tecnici", "Formula Quesiti Tecnici o per il CTU. REQ: Domande numerate, senza preamboli."))
+        st.markdown("**Tecnica**")
+        if st.checkbox("Punti Attacco"): tasks.append(("Punti_Attacco", "Elenca Punti di Attacco Tecnici con citazioni."))
+        if st.checkbox("Analisi Critica"): tasks.append(("Analisi_Critica", "Analizza criticamente controparte."))
+        if st.checkbox("Quesiti CTU"): tasks.append(("Quesiti_Tecnici", "Formula Quesiti Tecnici per CTU."))
     with col_c:
-        st.markdown("**Strategia & Chiusura**")
-        if st.checkbox("Nota Difensiva"): tasks.append(("Nota_Difensiva", "Redigi una Nota Difensiva/Replica completa. REQ: Integra i calcoli economici e le contestazioni tecniche."))
-        if st.checkbox("Strategia"): tasks.append(("Strategia", "Definisci la Strategia. REQ: Confronta Scenario A (Accordo) vs Scenario B (Contenzioso) con costi stimati."))
-        if st.checkbox("Bozza Accordo"): tasks.append(("Bozza_Accordo", "Redigi una Bozza di Accordo/Transazione. REQ: Inserisci clausola di validità temporale dell'offerta."))
-            
-    if st.button("GENERA FASCICOLO COMPLETO"):
+        st.markdown("**Chiusura**")
+        if st.checkbox("Replica"): tasks.append(("Nota_Difensiva", "Redigi Nota Difensiva completa."))
+        if st.checkbox("Strategia"): tasks.append(("Strategia", "Definisci Strategia (Scenario A vs B)."))
+        if st.checkbox("Transazione"): tasks.append(("Bozza_Accordo", "Redigi Bozza Transattiva aggressiva."))
+
+    if st.button("GENERA ANTEPRIMA (Gratis)"):
         parts, _ = get_file_content(files)
         st.session_state.generated_docs = {}
         bar = st.progress(0)
         for i, (name, prompt_task) in enumerate(tasks):
-            j = interroga_gemini_json(prompt_task, st.session_state.contesto_chat_text, parts, 5, False)
+            j = interroga_gemini_json(prompt_task, st.session_state.contesto_chat_text, parts, st.session_state.livello_aggressivita, False)
             d, m, e = crea_output_file(j, fmt)
             st.session_state.generated_docs[name] = {"data":d, "mime":m, "ext":e}
             bar.progress((i+1)/len(tasks))
-            
+        st.success("Documenti generati in memoria!")
+
+    # AREA DOWNLOAD (PROTETTA DAL PAYWALL)
     if st.session_state.generated_docs:
-        zip_data = crea_zip(st.session_state.generated_docs)
-        nome_zip = f"Fascicolo_{st.session_state.nome_fascicolo.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M')}.zip"
-        st.download_button("📦 SCARICA ZIP", zip_data, nome_zip, "application/zip", type="primary")
+        st.divider()
+        st.subheader("📥 Download & Delivery")
+        
+        if st.session_state.user_status == "FREE":
+            st.markdown(f"""
+            <div class='premium-box'>
+                <h3>🔒 {len(st.session_state.generated_docs)} DOCUMENTI PRONTI</h3>
+                <p>I documenti sono stati generati e sono pronti per la consegna.</p>
+                <p><b>Sblocca il download e l'invio email con Premium.</b></p>
+            </div>
+            """, unsafe_allow_html=True)
+            if PAYMENT_ENABLED:
+                u = crea_checkout_session()
+                st.link_button("SBLOCCA ORA (€49)", u, type="primary")
+        else:
+            # UTENTE PREMIUM
+            zip_data = crea_zip(st.session_state.generated_docs)
+            n_zip = f"Fascicolo_{st.session_state.nome_fascicolo.replace(' ', '_')}.zip"
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                st.download_button("📦 SCARICA TUTTO (ZIP)", zip_data, n_zip, "application/zip", type="primary")
+                for k, v in st.session_state.generated_docs.items():
+                    st.download_button(f"📄 {k}", v["data"], f"{k}.{v['ext']}", v["mime"])
+            
+            with c2:
+                st.write("**Invia al Cliente**")
+                dest = st.text_input("Email destinatario")
+                if st.button("📧 Invia Email"):
+                    zip_data.seek(0)
+                    res = invia_email(dest, f"Fascicolo {st.session_state.nome_fascicolo}", "In allegato i documenti.", zip_data, n_zip)
+                    if res is True: st.success("Email inviata!")
+                    else: st.error(f"Errore: {res}")
