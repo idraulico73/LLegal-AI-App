@@ -118,21 +118,24 @@ active_model = None
 PAYMENT_ENABLED = False
 EMAIL_ENABLED = False
 
-try:
-    if "GOOGLE_API_KEY" in st.secrets:
-        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-        HAS_KEY = True
-        active_model = "models/gemini-1.5-flash"
-    
-    if "stripe" in st.secrets:
-        stripe.api_key = st.secrets["stripe"]["secret_key"]
-        STRIPE_PUB_KEY = st.secrets["stripe"]["publishable_key"]
-        PAYMENT_ENABLED = True
-        
-    if "smtp" in st.secrets:
-        EMAIL_ENABLED = True
-except Exception as e:
-    print(f"Errore configurazione servizi: {e}")
+# AUTO-DISCOVERY MODELLO (Logica Rev 48 Ripristinata)
+        try:
+            lista_modelli = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            
+            # Ordine di preferenza: CERCA PRIMA IL PRO (Più intelligente), POI IL FLASH
+            if "models/gemini-1.5-pro" in lista_modelli: 
+                active_model = "models/gemini-1.5-pro"
+            elif "models/gemini-1.5-pro-latest" in lista_modelli: 
+                active_model = "models/gemini-1.5-pro-latest"
+            elif "models/gemini-1.5-flash" in lista_modelli: 
+                active_model = "models/gemini-1.5-flash"
+            else:
+                active_model = lista_modelli[0]
+                
+            print(f"Modello AI selezionato: {active_model}")
+
+        except Exception as e:
+            active_model = "models/gemini-1.5-flash" # Fallback estremo
 
 # ==============================================================================
 # 3. CORE LOGIC: PRIVACY & FORMATTAZIONE (DALLA REV 48)
@@ -844,3 +847,4 @@ else:
                     mime="application/zip",
                     type="primary"
                 )
+
