@@ -193,23 +193,44 @@ def interroga_gemini(model_name, prompt, context, file_parts, calc_data, sanitiz
         if not response.parts:
             return {"fase": "errore", "titolo": "Blocco Sicurezza AI", "contenuto": f"Feedback sicurezza: {response.prompt_feedback}"}
 
-        # Parsing sicuro
-        # NOTA: Qui NON usiamo json.loads() perché clean_json_text ritorna già un DICT!
-        parsed = clean_json_text(response.text)
-        
-        if parsed is None:
-             # Se il parsing fallisce, mostriamo il testo grezzo per debug
-             return {
-                 "fase": "errore", 
-                 "titolo": "Errore Formato AI", 
-                 "contenuto": f"L'AI ha risposto ma non in JSON valido.\n\nRaw output:\n{response.text[:500]}..."
-             }
+# --- IN modules/ai_engine.py ---
 
-        # Privacy Restore
-        if "contenuto" in parsed: parsed["contenuto"] = sanitizer.restore(parsed["contenuto"])
-        if "titolo" in parsed: parsed["titolo"] = sanitizer.restore(parsed["titolo"])
-            
-        return parsed
+def clean_json_text(text):
+    """
+    Versione Potenziata: Pulisce il testo e tenta il parsing JSON tollerante.
+    """
+    if not text: return None
+    
+    # 1. Pulizia Markdown
+    text = re.sub(r'```json\s*', '', text)
+    text = re.sub(r'```', '', text)
+    text = text.strip()
+    
+    # 2. Ricerca della prima graffa aperta e ultima chiusa
+    start = text.find('{')
+    end = text.rfind('}')
+    
+    if start != -1 and end != -1:
+        text = text[start:end+1]
+    else:
+        # Se non trova graffe, non è un JSON
+        return None
+    
+    # 3. Tentativi di Parsing
+    try:
+        # strict=False permette caratteri di controllo come \n reali dentro le stringhe
+        return json.loads(text, strict=False)
+    except json.JSONDecodeError:
+        pass
+
+    # 4. Tentativo Disperato (Fix newline comuni)
+    try:
+        # A volte Gemini mette newline reali invece di \n. Proviamo a sanare.
+        # Attenzione: questo è un fix euristico rischioso ma spesso efficace
+        fixed_text = text.replace('\n', '\\n')
+        return json.loads(fixed_text, strict=False)
+    except:
+        return None
 
     except Exception as e:
         return {"fase": "errore", "titolo": "Errore Tecnico", "contenuto": str(e)}
