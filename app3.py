@@ -17,6 +17,51 @@ from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from fpdf import FPDF
 
+# --- CODICE DEBUG EMAIL (DA RIMUOVERE DOPO) ---
+import smtplib
+from email.mime.text import MIMEText
+
+st.markdown("### 🛠️ DEBUG EMAIL")
+if st.button("TEST INVIO MAIL ORA"):
+    email_user = st.secrets["smtp"]["email"]
+    email_pwd = st.secrets["smtp"]["password"]
+    st.write(f"Tento connessione con: {email_user}...")
+    
+    try:
+        # 1. Connessione
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.ehlo()
+        server.starttls()
+        server.ehlo()
+        st.write("✅ Connessione Server OK")
+        
+        # 2. Login
+        server.login(email_user, email_pwd)
+        st.write("✅ Login OK")
+        
+        # 3. Invio
+        msg = MIMEText("Se leggi questo, l'email funziona.")
+        msg['Subject'] = "TEST DIAGNOSTICO LEXVANTAGE"
+        msg['From'] = email_user
+        msg['To'] = email_user # Manda a te stesso
+        
+        server.sendmail(email_user, email_user, msg.as_string())
+        server.quit()
+        st.success("✅ MAIL INVIATA CORRETTAMENTE! Controlla la posta.")
+        
+    except Exception as e:
+        st.error(f"❌ ERRORE CRITICO: {e}")
+# ----------------------------------------------
+
+# --- DEBUG SECRETS (DA RIMUOVERE DOPO) ---
+import streamlit as st
+st.write("DEBUG - CHIAVI LETTE:", st.secrets.keys())
+if "stripe" in st.secrets: st.write("Stripe found")
+if "smtp" in st.secrets: st.write("SMTP found")
+if "GOOGLE_API_KEY" in st.secrets: st.write("GOOGLE KEY FOUND ✅")
+else: st.write("❌ GOOGLE KEY MISSING - Controlla secrets.toml")
+# ------------------------------------------
+
 # --- GESTIONE IMPORT CONDIZIONALE SUPABASE ---
 try:
     from supabase import create_client, Client
@@ -847,5 +892,6 @@ else:
                     mime="application/zip",
                     type="primary"
                 )
+
 
 
