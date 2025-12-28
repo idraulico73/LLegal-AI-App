@@ -1,4 +1,3 @@
-# FILE: modules/ai_engine.py
 import re
 import json
 import streamlit as st
@@ -16,17 +15,19 @@ def init_ai():
 def get_best_model():
     """
     Trova il modello migliore disponibile.
-    Cerca gemini-1.5-flash o pro, fallback su gemini-pro standard.
+    Cerca gemini-1.5-flash (standard attuale), fallback su pro.
     """
     try:
-        models = [m.name for m in genai.list_models()]
-        # Priorità
-        if 'models/gemini-1.5-flash' in models: return 'models/gemini-1.5-flash'
-        if 'models/gemini-1.5-pro' in models: return 'models/gemini-1.5-pro'
-        if 'models/gemini-pro' in models: return 'models/gemini-pro'
-        return models[0] if models else None
+        # Lista modelli supportati
+        candidates = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']
+        available = [m.name for m in genai.list_models()]
+        
+        for c in candidates:
+            if c in available: return c
+            
+        return candidates[0] # Ritorna il primo come default cieco
     except:
-        return None
+        return 'models/gemini-1.5-flash'
 
 # --- 2. PRIVACY SHIELD ---
 class DataSanitizer:
@@ -54,12 +55,15 @@ class DataSanitizer:
             txt = txt.replace(f, r)
         return txt
 
-# --- 3. JSON PARSER ROBUSTO (Versione che ritorna DICT) ---
+# --- 3. JSON PARSER ROBUSTO (Versione Sicura) ---
 def clean_json_text(text):
     """
     Pulisce il testo da markdown e tenta di estrarre UN SOLO oggetto JSON valido.
-    Restituisce un DIZIONARIO (dict) se ha successo, o None se fallisce.
+    Restituisce un DIZIONARIO (dict).
+    Se fallisce, restituisce None (NON crasha).
     """
+    if not text: return None # Protezione input vuoto
+    
     # Rimuovi markdown code blocks
     text = re.sub(r'```json\s*', '', text)
     text = re.sub(r'```', '', text)
@@ -75,7 +79,7 @@ def clean_json_text(text):
     except json.JSONDecodeError:
         pass 
 
-    # TENTATIVO 2: Trova l'ultima graffa chiusa (per ignorare testo finale)
+    # TENTATIVO 2: Trova l'ultima graffa chiusa
     end = text.rfind('}')
     if end == -1: return None
     candidate = text[:end+1]
@@ -83,8 +87,7 @@ def clean_json_text(text):
     try:
         return json.loads(candidate)
     except json.JSONDecodeError:
-        # TENTATIVO 3: Gestione "Extra data" (es. doppi JSON o testo sporco)
-        # Conta le parentesi per trovare la chiusura logica del primo oggetto
+        # TENTATIVO 3: Bilanciamento parentesi (per Extra Data)
         balance = 0
         for i, char in enumerate(text):
             if char == '{': balance += 1
@@ -100,29 +103,30 @@ def stima_costo_token(context_text, num_docs, pricing_row):
     """Calcola costo preventivo dinamico"""
     if not pricing_row: return 150.00 # Fallback
     
-    p_fisso = float(pricing_row.get('prezzo_fisso', 0) or 0)
-    p_in_1k = float(pricing_row.get('prezzo_per_1k_input_token', 0.02) or 0.02)
-    p_out_1k = float(pricing_row.get('prezzo_per_1k_output_token', 0.05) or 0.05)
-    molt = float(pricing_row.get('moltiplicatore_complessita', 1.0) or 1.0)
+    try:
+        p_fisso = float(pricing_row.get('prezzo_fisso', 0) or 0)
+        p_in_1k = float(pricing_row.get('prezzo_per_1k_input_token', 0.02) or 0.02)
+        p_out_1k = float(pricing_row.get('prezzo_per_1k_output_token', 0.05) or 0.05)
+        molt = float(pricing_row.get('moltiplicatore_complessita', 1.0) or 1.0)
+    except:
+        return 150.00 # Fallback su errore conversione
 
-    # 1 Token ~= 4 caratteri
+    # Stima Token (1 token ~= 4 chars)
     token_input_est = len(context_text) / 4
-    token_output_est = (num_docs * 2000) / 4 # 2k caratteri medi per doc
+    token_output_est = (num_docs * 2000) / 4 
 
     costo_input = (token_input_est / 1000) * p_in_1k
     costo_output = (token_output_est / 1000) * p_out_1k
     
-    totale = (costo_input + costo_output + p_fisso) * moltiplicatore
+    totale = (costo_input + costo_output + p_fisso) * molt
     return max(5.0, round(totale, 2))
 
-# --- 5. CHAT STRATEGICA (TAB 2) - FIX DICT/STR ---
+# --- 5. CHAT STRATEGICA (TAB 2) ---
 def interroga_gemini(model_name, prompt, context, file_parts, calc_data, sanitizer, pricing_info, aggression_level):
     
     active_model = get_best_model()
-    if not active_model: 
-        return {"fase": "errore", "titolo": "Errore", "contenuto": "Nessun modello AI configurato."}
-
-    # SAFETY SETTINGS: BLOCK_NONE per strategie legali aggressive
+    
+    # SAFETY SETTINGS: BLOCK_NONE (Critico per strategie legali aggressive)
     safety_settings = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -130,12 +134,16 @@ def interroga_gemini(model_name, prompt, context, file_parts, calc_data, sanitiz
         {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
     ]
     
+    # Configurazione generazione
     generation_config = {
         "temperature": 0.7 + (aggression_level * 0.03),
         "response_mime_type": "application/json"
     }
 
-    model = genai.GenerativeModel(active_model, safety_settings=safety_settings, generation_config=generation_config)
+    try:
+        model = genai.GenerativeModel(active_model, safety_settings=safety_settings, generation_config=generation_config)
+    except Exception as e:
+        return {"fase": "errore", "titolo": "Config Errore", "contenuto": f"Init model fallito: {e}"}
 
     full_payload = list(file_parts)
     
@@ -167,14 +175,21 @@ def interroga_gemini(model_name, prompt, context, file_parts, calc_data, sanitiz
     try:
         response = model.generate_content(full_payload)
         
+        # Controllo se l'AI è stata bloccata dai filtri
         if not response.parts:
-            return {"fase": "errore", "titolo": "Blocco Sicurezza", "contenuto": str(response.prompt_feedback)}
+            return {"fase": "errore", "titolo": "Blocco Sicurezza AI", "contenuto": f"Feedback sicurezza: {response.prompt_feedback}"}
 
-        # FIX: clean_json_text ritorna già un DICT, non usare json.loads qui!
+        # Parsing sicuro
+        # NOTA: Qui NON usiamo json.loads() perché clean_json_text ritorna già un DICT!
         parsed = clean_json_text(response.text)
         
         if parsed is None:
-             return {"fase": "errore", "titolo": "Errore Formato", "contenuto": f"Output AI non valido:\n{response.text[:300]}..."}
+             # Se il parsing fallisce, mostriamo il testo grezzo per debug
+             return {
+                 "fase": "errore", 
+                 "titolo": "Errore Formato AI", 
+                 "contenuto": f"L'AI ha risposto ma non in JSON valido.\n\nRaw output:\n{response.text[:500]}..."
+             }
 
         # Privacy Restore
         if "contenuto" in parsed: parsed["contenuto"] = sanitizer.restore(parsed["contenuto"])
@@ -195,7 +210,6 @@ def genera_docs_json_batch(tasks, context_chat, file_parts, calc_data, model_nam
     
     system_instruction = """
     SEI UN GENERATORE DI API JSON. OUTPUT FORMAT: { "titolo": "...", "contenuto": "..." }
-    NON SCRIVERE TESTO FUORI DAL JSON.
     """
 
     for doc_name, task_prompt in tasks:
@@ -212,7 +226,8 @@ def genera_docs_json_batch(tasks, context_chat, file_parts, calc_data, model_nam
         
         try:
             raw_response = model.generate_content(full_payload).text
-            # clean_json_text ritorna dict
+            
+            # Parsing sicuro
             cleaned_obj = clean_json_text(raw_response)
             
             if isinstance(cleaned_obj, dict):
