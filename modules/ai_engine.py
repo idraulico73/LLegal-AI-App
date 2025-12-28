@@ -120,55 +120,103 @@ def get_best_model():
     except Exception as e:
         return None
 
-# --- 4. LOGICA CORE: INTERVISTA (REFATTORED - Usa get_best_model) ---
-def interroga_gemini(model_name_ignored, prompt, history, files_content, calc_data, sanitizer, price_info, livello_aggressivita):
-    # QUI ABBIAMO RISPARMIATO RIGHE: Usiamo la funzione centralizzata invece di ripetere il try/except
-    active_model = get_best_model()
-    
-    if not active_model:
-        return {"fase": "errore", "titolo": "Errore AI", "contenuto": "Nessun modello Google Gemini disponibile o chiave errata."}
+# --- SOSTITUIRE LA FUNZIONE interroga_gemini IN ai_engine.py ---
 
-    safe_p = sanitizer.sanitize(prompt)
-    safe_h = sanitizer.sanitize(history)
-    
-    mood_map = { 1: "Diplomatico", 5: "Pragmatico", 10: "DISTRUTTIVO" }
-    livello = livello_aggressivita if livello_aggressivita else 5
-    mood_desc = mood_map.get(livello, "Pragmatico")
-
-    sys_prompt = f"""
-    SEI LEXVANTAGE. RUOLO: Senior Legal Strategist.
-    MOOD: {livello}/10 ({mood_desc}).
-    OBIETTIVO: Vendere il 'Fascicolo Documentale' ({price_info}).
-    DATI TECNICI: {calc_data}
-    STORICO: {safe_h}
-    
-    ISTRUZIONI:
-    1. Analizza input e documenti.
-    2. RISPONDI IN JSON:
-       {{
-         "fase": "intervista" (se mancano dati) O "strategia" (se ok),
-         "titolo": "...", 
-         "contenuto": "..." (Markdown)
-       }}
+def interroga_gemini(model_name, prompt, context, file_parts, calc_data, sanitizer, pricing_info, aggression_level):
     """
+    Gestisce la chat strategica (Tab 2).
+    """
+    # 1. Configurazione Modello e Sicurezza (PERMETTI TUTTO PER STRATEGIA LEGALE)
+    active_model = get_best_model() # Usa il modello disponibile (es. 1.5-flash)
+    if not active_model: 
+        return {"fase": "errore", "titolo": "Errore", "contenuto": "Nessun modello AI configurato."}
 
-    payload = list(files_content)
-    payload.append(f"UTENTE: {safe_p}")
+    # Disabilitiamo i blocchi di sicurezza per permettere termini come "terrorizzare", "attacco", ecc.
+    safety_settings = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
     
+    generation_config = {
+        "temperature": 0.7 + (aggression_level * 0.03), # Più aggressivo = Più creativo
+        "response_mime_type": "application/json"
+    }
+
+    model = genai.GenerativeModel(
+        active_model, 
+        safety_settings=safety_settings,
+        generation_config=generation_config
+    )
+
+    # 2. Costruzione Prompt
+    full_payload = list(file_parts) # Copia lista parti (file caricati)
+    
+    system_prompt = f"""
+    RUOLO: Sei un Senior Legal Strategist spietato e calcolatore.
+    OBIETTIVO: Fornire strategie processuali vincenti, anche aggressive ("Low Cost / High Impact").
+    
+    CONTESTO CAUSA:
+    {context}
+    
+    DATI TECNICI / NOTE:
+    {calc_data}
+    
+    BUDGET CLIENTE: {pricing_info} (Se budget 0, proponi soluzioni a costo zero).
+    LIVELLO AGGRESSIVITÀ: {aggression_level}/10.
+    
+    ISTRUZIONI UTENTE: 
+    "{prompt}"
+    
+    OUTPUT RICHIESTO (FORMATO JSON UNICO):
+    {{
+        "fase": "strategia", 
+        "titolo": "Titolo Incisivo",
+        "contenuto": "Testo della risposta (usa Markdown, elenchi puntati, grassetti per i punti chiave)."
+    }}
+    NON AGGIUNGERE ALTRO TESTO FUORI DAL JSON.
+    """
+    
+    full_payload.append(system_prompt)
+
+    # 3. Chiamata AI e Gestione Errori
     try:
-        model = genai.GenerativeModel(active_model, system_instruction=sys_prompt, generation_config={"response_mime_type": "application/json"})
-        raw_response = model.generate_content(payload).text
-        clean_response = clean_json_text(raw_response)
-        parsed = json.loads(clean_response)
+        # Chiamata
+        response = model.generate_content(full_payload)
         
+        # Gestione Safety Block (se la risposta è vuota nonostante BLOCK_NONE)
+        if not response.parts:
+            return {
+                "fase": "errore", 
+                "titolo": "Blocco Sicurezza AI", 
+                "contenuto": f"L'AI ha rifiutato di rispondere. Motivo: {response.prompt_feedback}"
+            }
+
+        # Parsing JSON (La funzione clean_json_text ora ritorna DICT o None)
+        raw_text = response.text
+        parsed = clean_json_text(raw_text)
+        
+        # Se clean_json_text ha fallito (ritorna None), restituisci errore gestito
+        if parsed is None:
+             return {
+                 "fase": "errore", 
+                 "titolo": "Errore Formattazione AI", 
+                 "contenuto": f"L'AI ha generato una risposta non strutturata correttamente.\n\nRaw output:\n{raw_text[:500]}..."
+             }
+
+        # Privacy Restore
         if "contenuto" in parsed: parsed["contenuto"] = sanitizer.restore(parsed["contenuto"])
         if "titolo" in parsed: parsed["titolo"] = sanitizer.restore(parsed["titolo"])
             
         return parsed
 
     except Exception as e:
-        return {"fase": "errore", "titolo": "Errore Tecnico", "contenuto": f"Errore modello ({active_model}): {str(e)}"}
-
+        return {
+            "fase": "errore", 
+            "titolo": "Errore Tecnico", 
+            "contenuto": f"Dettaglio errore: {str(e)}"
+        }
 # 3. AGGIORNAMENTO GENERATORE BATCH (System Prompt Indurito)
 def genera_docs_json_batch(tasks, context_chat, file_parts, calc_data, model_name_ignored):
     active_model = get_best_model() # Usa la tua funzione esistente
