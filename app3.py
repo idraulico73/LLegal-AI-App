@@ -282,29 +282,28 @@ def parse_markdown_pro(doc, text):
 # ==============================================================================
 
 def send_admin_alert(new_user_email):
-    """Invia email all'Admin quando un nuovo utente si registra"""
-    if not EMAIL_ENABLED: return
+    """Avvisa l'admin di una nuova registrazione (Versione Debug)"""
+    if not EMAIL_ENABLED: return False, "SMTP Disabilitato"
     try:
         msg = MIMEMultipart()
-        msg['Subject'] = f"🔔 Nuovo Iscritto LexVantage: {new_user_email}"
+        msg['Subject'] = f"🔔 Nuovo Iscritto: {new_user_email}"
         msg['From'] = st.secrets["smtp"]["email"]
-        msg['To'] = st.secrets["smtp"]["email"] # Invia a se stesso
+        msg['To'] = st.secrets["smtp"]["email"]
         
-        body = f"""
-        Un nuovo utente ha richiesto l'accesso.
-        Email: {new_user_email}
-        
-        Accedi al Pannello Admin per approvare o rifiutare.
-        """
+        body = f"Utente {new_user_email} richiede accesso. Vai al pannello Admin."
         msg.attach(MIMEText(body, 'plain'))
         
-        s = smtplib.SMTP(st.secrets["smtp"]["server"], st.secrets["smtp"]["port"])
-        s.starttls()
-        s.login(st.secrets["smtp"]["email"], st.secrets["smtp"]["password"])
-        s.sendmail(st.secrets["smtp"]["email"], st.secrets["smtp"]["email"], msg.as_string())
-        s.quit()
+        # Connessione Esplicita (Come nel test che funzionava)
+        server = smtplib.SMTP(st.secrets["smtp"]["server"], st.secrets["smtp"]["port"])
+        server.ehlo()
+        server.starttls()
+        server.ehlo()
+        server.login(st.secrets["smtp"]["email"], st.secrets["smtp"]["password"])
+        server.sendmail(st.secrets["smtp"]["email"], st.secrets["smtp"]["email"], msg.as_string())
+        server.quit()
+        return True, "Email inviata"
     except Exception as e:
-        print(f"Errore invio mail admin: {e}")
+        return False, str(e)
 
 def send_approval_email(user_email):
     """Invia email all'Utente quando viene approvato"""
@@ -342,7 +341,7 @@ def send_approval_email(user_email):
 # ==============================================================================
 
 def login_form():
-    """Gestisce Login e Registrazione con DB Supabase Custom"""
+    """Gestisce Login e Registrazione con Check Stato Intelligente"""
     st.markdown("<div class='auth-box'>", unsafe_allow_html=True)
     st.markdown("<h2 style='text-align: center;'>🔐 Accedi a LexVantage</h2>", unsafe_allow_html=True)
     
@@ -354,7 +353,6 @@ def login_form():
         
         if st.button("Accedi", type="primary"):
             if supabase:
-                # Query sulla tabella profili_utenti
                 res = supabase.table("profili_utenti").select("*").eq("email", email).eq("password", pwd).execute()
                 if res.data:
                     user = res.data[0]
@@ -365,32 +363,36 @@ def login_form():
                         st.session_state.user_id = user['id']
                         st.rerun()
                     elif user['stato_account'] == 'in_attesa':
-                        st.warning("⏳ Il tuo account è in attesa di approvazione.")
+                        st.warning("⏳ Account creato ma non ancora approvato dall'Admin.")
                     else:
-                        st.error("🚫 Account sospeso o disattivato.")
+                        st.error("🚫 Account sospeso.")
                 else:
                     st.error("Email o password errati.")
             else:
-                # Fallback Offline (Solo se DB non connesso)
+                # Fallback Offline
                 if email=="admin" and pwd=="admin":
                     st.session_state.auth_status="logged_in"; st.session_state.user_role="admin"; st.rerun()
-                elif email=="user" and pwd=="user":
-                    st.session_state.auth_status="logged_in"; st.session_state.user_role="user"; st.rerun()
 
     with tab_register:
-        st.write("Crea un nuovo account per il tuo Studio.")
+        st.write("Richiedi accesso per il tuo Studio.")
         reg_email = st.text_input("Email", key="reg_email")
         reg_pwd = st.text_input("Password", type="password", key="reg_pwd")
-        reg_studio = st.text_input("Nome Studio Legale", key="reg_studio")
+        reg_studio = st.text_input("Nome Studio", key="reg_studio")
         
-        if st.button("Richiedi Accesso"):
+        if st.button("Invia Richiesta"):
             if reg_email and reg_pwd and reg_studio and supabase:
-                try:
-                    # Verifica esistenza
-                    check = supabase.table("profili_utenti").select("email").eq("email", reg_email).execute()
-                    if check.data:
-                        st.error("Email già registrata.")
+                # 1. CONTROLLO PREVENTIVO ESISTENZA
+                check = supabase.table("profili_utenti").select("stato_account").eq("email", reg_email).execute()
+                
+                if check.data:
+                    stato = check.data[0]['stato_account']
+                    if stato == 'in_attesa':
+                        st.warning("⚠️ Hai già inviato una richiesta con questa email. È in attesa di approvazione.")
                     else:
+                        st.error("⚠️ Esiste già un account attivo con questa email. Vai al Login.")
+                else:
+                    # 2. INSERIMENTO NUOVO UTENTE
+                    try:
                         supabase.table("profili_utenti").insert({
                             "email": reg_email, 
                             "password": reg_pwd, 
@@ -399,12 +401,17 @@ def login_form():
                             "stato_account": "in_attesa"
                         }).execute()
                         
-                        # Invia avviso all'admin
-                        send_admin_alert(reg_email)
-                        
-                        st.success("✅ Richiesta inviata con successo! Riceverai una mail appena l'account sarà attivo.")
-                except Exception as e:
-                    st.error(f"Errore durante la registrazione: {str(e)}")
+                        # 3. INVIO MAIL CON FEEDBACK VISIVO
+                        with st.spinner("Invio notifica all'Admin..."):
+                            success, msg = send_admin_alert(reg_email)
+                            
+                        if success:
+                            st.success("✅ Richiesta inviata! L'Admin è stato notificato.")
+                        else:
+                            st.warning(f"✅ Richiesta salvata nel DB, ma notifica Admin fallita: {msg}")
+                            
+                    except Exception as e:
+                        st.error(f"Errore Database: {str(e)}")
             else:
                 st.warning("Compila tutti i campi.")
                 
@@ -892,6 +899,7 @@ else:
                     mime="application/zip",
                     type="primary"
                 )
+
 
 
 
