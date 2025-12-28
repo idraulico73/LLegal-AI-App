@@ -30,22 +30,55 @@ def render_admin_panel(supabase):
                 st.rerun()
 
     # --- TAB PREZZI ---
+# --- SOSTITUIRE IL BLOCCO 'with t_prices:' IN modules/admin.py ---
     with t_prices:
-        st.subheader("Listino Dinamico")
-        prices = supabase.table("listino_prezzi").select("*").execute().data
-        for p in prices:
-            with st.form(f"price_{p['id']}"):
-                st.write(f"### {p['tipo_documento']}")
-                nf = st.number_input("Prezzo Fisso (€)", value=float(p.get('prezzo_fisso', 0)))
-                desc = st.text_input("Descrizione", value=p.get('descrizione', ''))
-                if st.form_submit_button("Salva"):
-                    supabase.table("listino_prezzi").update({
-                        "prezzo_fisso": nf,
-                        "descrizione": desc
-                    }).eq("id", p['id']).execute()
-                    st.success("Aggiornato")
-                    time.sleep(1)
-                    st.rerun()
+        st.subheader("💰 Listino Prezzi Granulare")
+        st.caption("Definisci prezzi fissi e variabili per ogni tipo di documento.")
+        
+        # 1. Recupera listino attuale dal DB
+        db_prices_list = supabase.table("listino_prezzi").select("*").execute().data
+        db_map = {row['tipo_documento']: row for row in db_prices_list}
+        
+        # 2. Elenco di tutti i documenti gestiti (da Config + Jolly)
+        from . import config # Import locale per sicurezza
+        all_doc_types = set()
+        for cat in config.CASE_TYPES_FALLBACK.values():
+            for d in config.DOCS_METADATA.keys(): # Prende tutte le chiavi note
+                all_doc_types.add(d)
+        all_doc_types.add("Documento_Dinamico") # Prezzo per richieste custom
+        all_doc_types.add("pacchetto_base") # Prezzo legacy
+        
+        # 3. Genera griglia di edit
+        for doc_type in sorted(all_doc_types):
+            row_data = db_map.get(doc_type, {})
+            
+            with st.expander(f"Prezzo: {doc_type}", expanded=False):
+                with st.form(f"price_form_{doc_type}"):
+                    c1, c2, c3 = st.columns(3)
+                    p_fisso = c1.number_input("Fisso (€)", value=float(row_data.get('prezzo_fisso', 0.0)))
+                    p_tok_out = c2.number_input("Costo x 1k Token Out (€)", value=float(row_data.get('prezzo_per_1k_output_token', 0.05)), format="%.3f")
+                    molt = c3.number_input("Moltiplicatore Complessità", value=float(row_data.get('moltiplicatore_complessita', 1.0)))
+                    
+                    desc = st.text_input("Descrizione / Note", value=row_data.get('descrizione', ''))
+                    
+                    if st.form_submit_button("💾 Salva Prezzo"):
+                        upsert_data = {
+                            "tipo_documento": doc_type,
+                            "prezzo_fisso": p_fisso,
+                            "prezzo_per_1k_input_token": 0.01, # Default basso fisso
+                            "prezzo_per_1k_output_token": p_tok_out,
+                            "moltiplicatore_complessita": molt,
+                            "descrizione": desc
+                        }
+                        
+                        if 'id' in row_data:
+                            supabase.table("listino_prezzi").update(upsert_data).eq("id", row_data['id']).execute()
+                        else:
+                            supabase.table("listino_prezzi").insert(upsert_data).execute()
+                        
+                        st.success(f"Aggiornato: {doc_type}")
+                        time.sleep(1)
+                        st.rerun()
 
     # --- TAB AUDIT ---
     with t_audit:
