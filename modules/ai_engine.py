@@ -73,46 +73,43 @@ class DataSanitizer:
         return txt
 
 # --- 3. JSON PARSER ROBUSTO (Versione Sicura) ---
+# --- IN modules/ai_engine.py ---
+
 def clean_json_text(text):
     """
-    Pulisce il testo da markdown e tenta di estrarre UN SOLO oggetto JSON valido.
-    Restituisce un DIZIONARIO (dict).
-    Se fallisce, restituisce None (NON crasha).
+    Versione Potenziata: Pulisce il testo e tenta il parsing JSON tollerante.
     """
-    if not text: return None # Protezione input vuoto
+    if not text: return None
     
-    # Rimuovi markdown code blocks
+    # 1. Pulizia Markdown
     text = re.sub(r'```json\s*', '', text)
     text = re.sub(r'```', '', text)
+    text = text.strip()
     
-    # Trova la prima graffa aperta
+    # 2. Ricerca della prima graffa aperta e ultima chiusa
     start = text.find('{')
-    if start == -1: return None
-    text = text[start:]
-    
-    # TENTATIVO 1: Parsing diretto
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass 
-
-    # TENTATIVO 2: Trova l'ultima graffa chiusa
     end = text.rfind('}')
-    if end == -1: return None
-    candidate = text[:end+1]
     
+    if start != -1 and end != -1:
+        text = text[start:end+1]
+    else:
+        # Se non trova graffe, non è un JSON
+        return None
+    
+    # 3. Tentativi di Parsing
     try:
-        return json.loads(candidate)
+        # strict=False permette caratteri di controllo come \n reali dentro le stringhe
+        return json.loads(text, strict=False)
     except json.JSONDecodeError:
-        # TENTATIVO 3: Bilanciamento parentesi (per Extra Data)
-        balance = 0
-        for i, char in enumerate(text):
-            if char == '{': balance += 1
-            elif char == '}': balance -= 1
-            if balance == 0:
-                try:
-                    return json.loads(text[:i+1])
-                except: break
+        pass
+
+    # 4. Tentativo Disperato (Fix newline comuni)
+    try:
+        # A volte Gemini mette newline reali invece di \n. Proviamo a sanare.
+        # Attenzione: questo è un fix euristico rischioso ma spesso efficace
+        fixed_text = text.replace('\n', '\\n')
+        return json.loads(fixed_text, strict=False)
+    except:
         return None
 
 # --- 4. FUNZIONI DI CALCOLO COSTI ---
