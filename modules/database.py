@@ -132,38 +132,46 @@ def get_active_gemini_models(supabase):
 
 def registra_transazione_doc(supabase, fascicolo_id, doc_type, model_name, tokens_in, tokens_out):
     """
-    CALCOLO PREZZO DINAMICO E SALVATAGGIO SNAPSHOT.
-    Formula: ( (TokIn * CostoIn) + (TokOut * CostoOut) ) * CoefficienteDoc
+    CALCOLO PREZZO IBRIDO:
+    Totale = PrezzoFisso + (CostoVariabileAI * Moltiplicatore)
     """
-    if not supabase: return 0.0
+    if not supabase: return 0.0, {}
 
     try:
         # 1. Recupera Costi Modello (dalla tabella gemini_models)
+        # Costo vivo puro dell'intelligenza artificiale
         mod_res = supabase.table("gemini_models").select("*").eq("model_name", model_name).execute()
+        
         if not mod_res.data:
-            # Fallback prezzi se modello non trovato (es. 0.0) o gestione errore
-            cost_in_unit, cost_out_unit = 0.0, 0.0
+             # Fallback: usiamo prezzi di sicurezza se il modello non è censito
+            cost_in_unit, cost_out_unit = 0.00035, 0.00105 
         else:
             m = mod_res.data[0]
-            # Assicurati che i nomi colonne coincidano con la tua tabella creata
+            # Gestisce diverse nomenclature colonne se presenti
             cost_in_unit = float(m.get('input_price', 0) or m.get('cost_per_1k_input', 0))
             cost_out_unit = float(m.get('output_price', 0) or m.get('cost_per_1k_output', 0))
 
-        # 2. Recupera Coefficiente Documento (dalla tabella listino_prezzi)
-        list_res = supabase.table("listino_prezzi").select("moltiplicatore_complessita").eq("tipo_documento", doc_type).execute()
+        # 2. Recupera Configurazione Listino (Prezzo Fisso + Moltiplicatore)
+        list_res = supabase.table("listino_prezzi").select("*").eq("tipo_documento", doc_type).execute()
         
-        # Se non c'è nel listino, default a 1.0
+        # Valori Default
+        prezzo_fisso = 0.0
         coeff = 1.0
+        
         if list_res.data:
-            coeff = float(list_res.data[0].get('moltiplicatore_complessita', 1.0))
+            row = list_res.data[0]
+            prezzo_fisso = float(row.get('prezzo_fisso', 0.0))
+            coeff = float(row.get('moltiplicatore_complessita', 1.0))
 
-        # 3. Calcolo Formula
+        # 3. Calcolo Formula Reale
         costo_base_in = (tokens_in / 1000) * cost_in_unit
         costo_base_out = (tokens_out / 1000) * cost_out_unit
+        costo_variabile_totale = costo_base_in + costo_base_out
         
-        prezzo_finale = (costo_base_in + costo_base_out) * coeff
+        # FORMULA FINALE: Base Fissa + (Costo Variabile * Moltiplicatore Margine)
+        prezzo_finale = prezzo_fisso + (costo_variabile_totale * coeff)
         
-        # 4. Creazione Snapshot (Scontrino)
+        # 4. Creazione Snapshot
         import datetime
         doc_snapshot = {
             "titolo": doc_type,
@@ -172,14 +180,15 @@ def registra_transazione_doc(supabase, fascicolo_id, doc_type, model_name, token
             "metadata_pricing": {
                 "model_used": model_name,
                 "tokens": {"input": tokens_in, "output": tokens_out},
-                "unit_costs": {"in": cost_in_unit, "out": cost_out_unit},
-                "coefficient": coeff,
+                "components": {
+                    "fixed_fee": prezzo_fisso,
+                    "variable_cost": costo_variabile_totale,
+                    "multiplier": coeff
+                },
                 "final_price": prezzo_finale
             }
-            # Nota: Il contenuto del doc verrà aggiunto/gestito all'aggiornamento lista
         }
 
-        # Ritorna i dati calcolati per essere usati nell'aggiornamento finale
         return prezzo_finale, doc_snapshot
 
     except Exception as e:
