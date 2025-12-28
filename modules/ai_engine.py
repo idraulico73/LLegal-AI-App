@@ -218,43 +218,74 @@ def interroga_gemini(model_name, prompt, context, file_parts, calc_data, sanitiz
         return {"fase": "errore", "titolo": "Errore Tecnico", "contenuto": str(e)}
 
 # --- 6. GENERATORE BATCH (TAB 3) ---
-def genera_docs_json_batch(tasks, context_chat, file_parts, calc_data, model_name_ignored):
-    active_model = get_best_model()
-    if not active_model: return {"Errore": {"titolo": "Errore", "contenuto": "Modello non trovato"}}
+# --- AGGIUNGERE IN FONDO A modules/database.py ---
 
-    results = {}
-    model = genai.GenerativeModel(active_model, generation_config={"response_mime_type": "application/json"})
-    
-    system_instruction = """
-    SEI UN GENERATORE DI API JSON. OUTPUT FORMAT: { "titolo": "...", "contenuto": "..." }
+def get_active_gemini_models(supabase):
     """
+    Recupera i modelli attivi dalla tabella 'gemini_models' creata dall'utente.
+    Restituisce una lista di dict: [{'model_name': '...', 'display_name': '...'}, ...]
+    """
+    if not supabase: return []
+    try:
+        # Assumiamo che la tua tabella abbia colonne: model_name, display_name, is_active
+        res = supabase.table("gemini_models").select("*").eq("is_active", True).execute()
+        return res.data
+    except Exception as e:
+        # Fallback se la tabella è vuota o errore, per non rompere l'app
+        return [{"model_name": "models/gemini-1.5-flash", "display_name": "Gemini 1.5 Flash (Default)"}]
 
-    for doc_name, task_prompt in tasks:
-        full_payload = list(file_parts)
+def registra_transazione_doc(supabase, fascicolo_id, doc_type, model_name, tokens_in, tokens_out):
+    """
+    CALCOLO PREZZO DINAMICO E SALVATAGGIO SNAPSHOT.
+    Formula: ( (TokIn * CostoIn) + (TokOut * CostoOut) ) * CoefficienteDoc
+    """
+    if not supabase: return 0.0
+
+    try:
+        # 1. Recupera Costi Modello (dalla tabella gemini_models)
+        mod_res = supabase.table("gemini_models").select("*").eq("model_name", model_name).execute()
+        if not mod_res.data:
+            # Fallback prezzi se modello non trovato (es. 0.0) o gestione errore
+            cost_in_unit, cost_out_unit = 0.0, 0.0
+        else:
+            m = mod_res.data[0]
+            # Assicurati che i nomi colonne coincidano con la tua tabella creata
+            cost_in_unit = float(m.get('input_price', 0) or m.get('cost_per_1k_input', 0))
+            cost_out_unit = float(m.get('output_price', 0) or m.get('cost_per_1k_output', 0))
+
+        # 2. Recupera Coefficiente Documento (dalla tabella listino_prezzi)
+        list_res = supabase.table("listino_prezzi").select("moltiplicatore_complessita").eq("tipo_documento", doc_type).execute()
         
-        prompt_specifico = f"""
-        {system_instruction}
-        CONTESTO FASCICOLO: {context_chat}
-        DATI TECNICI: {calc_data}
-        OBIETTIVO DOCUMENTO: {doc_name}
-        ISTRUZIONI: {task_prompt}
-        """
-        full_payload.append(prompt_specifico)
+        # Se non c'è nel listino, default a 1.0
+        coeff = 1.0
+        if list_res.data:
+            coeff = float(list_res.data[0].get('moltiplicatore_complessita', 1.0))
+
+        # 3. Calcolo Formula
+        costo_base_in = (tokens_in / 1000) * cost_in_unit
+        costo_base_out = (tokens_out / 1000) * cost_out_unit
         
-        try:
-            raw_response = model.generate_content(full_payload).text
-            
-            # Parsing sicuro
-            cleaned_obj = clean_json_text(raw_response)
-            
-            if isinstance(cleaned_obj, dict):
-                results[doc_name] = cleaned_obj
-            else:
-                results[doc_name] = {
-                    "titolo": f"Errore {doc_name}", 
-                    "contenuto": f"Formato non valido. Raw: {raw_response[:200]}..."
-                }
-        except Exception as e:
-            results[doc_name] = {"titolo": "Errore Tecnico", "contenuto": str(e)}
-            
-    return results
+        prezzo_finale = (costo_base_in + costo_base_out) * coeff
+        
+        # 4. Creazione Snapshot (Scontrino)
+        import datetime
+        doc_snapshot = {
+            "titolo": doc_type,
+            "tipo": "auto_generato",
+            "data_creazione": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "metadata_pricing": {
+                "model_used": model_name,
+                "tokens": {"input": tokens_in, "output": tokens_out},
+                "unit_costs": {"in": cost_in_unit, "out": cost_out_unit},
+                "coefficient": coeff,
+                "final_price": prezzo_finale
+            }
+            # Nota: Il contenuto del doc verrà aggiunto/gestito all'aggiornamento lista
+        }
+
+        # Ritorna i dati calcolati per essere usati nell'aggiornamento finale
+        return prezzo_finale, doc_snapshot
+
+    except Exception as e:
+        print(f"Errore calcolo prezzo: {e}")
+        return 0.0, {}
