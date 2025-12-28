@@ -1,31 +1,64 @@
+# FILE: modules/ai_engine.py
 import re
 import json
 import streamlit as st
 import google.generativeai as genai
-import logging
+from . import config
 
-# --- 1. PRIVACY SHIELD (INVARIATO) ---
+# --- 1. CONFIGURAZIONE AI ---
+def init_ai():
+    """Inizializza la chiave API di Google Gemini"""
+    if "GOOGLE_API_KEY" in st.secrets:
+        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+    else:
+        st.warning("⚠️ Google API Key mancante nei secrets.")
+
+def get_best_model():
+    """
+    Trova il modello migliore disponibile.
+    Cerca gemini-1.5-flash o pro, fallback su gemini-pro standard.
+    """
+    try:
+        models = [m.name for m in genai.list_models()]
+        # Priorità
+        if 'models/gemini-1.5-flash' in models: return 'models/gemini-1.5-flash'
+        if 'models/gemini-1.5-pro' in models: return 'models/gemini-1.5-pro'
+        if 'models/gemini-pro' in models: return 'models/gemini-pro'
+        return models[0] if models else None
+    except:
+        return None
+
+# --- 2. PRIVACY SHIELD ---
 class DataSanitizer:
     def __init__(self):
-        self.mapping = {}; self.reverse = {}; self.cnt = 1
+        self.mapping = {}
+        self.reverse = {}
+        self.cnt = 1
+
     def add(self, real, label):
         if real and real not in self.mapping:
             fake = f"[{label}_{self.cnt}]"
-            self.mapping[real] = fake; self.reverse[fake] = real; self.cnt += 1
+            self.mapping[real] = fake
+            self.reverse[fake] = real
+            self.cnt += 1
+
     def sanitize(self, txt):
         if not txt: return ""
-        for r, f in self.mapping.items(): txt = txt.replace(r, f).replace(r.upper(), f)
-        return txt
-    def restore(self, txt):
-        if not txt: return ""
-        for f, r in self.reverse.items(): txt = txt.replace(f, r)
+        for r, f in self.mapping.items():
+            txt = txt.replace(r, f).replace(r.upper(), f)
         return txt
 
-# 1. FUNZIONE CLEAN JSON PIÙ ROBUSTA
+    def restore(self, txt):
+        if not txt: return ""
+        for f, r in self.reverse.items():
+            txt = txt.replace(f, r)
+        return txt
+
+# --- 3. JSON PARSER ROBUSTO (Versione che ritorna DICT) ---
 def clean_json_text(text):
     """
     Pulisce il testo da markdown e tenta di estrarre UN SOLO oggetto JSON valido.
-    Gestisce il caso 'Extra data' troncando il testo dopo la chiusura corretta.
+    Restituisce un DIZIONARIO (dict) se ha successo, o None se fallisce.
     """
     # Rimuovi markdown code blocks
     text = re.sub(r'```json\s*', '', text)
@@ -33,105 +66,63 @@ def clean_json_text(text):
     
     # Trova la prima graffa aperta
     start = text.find('{')
-    if start == -1: return ""
+    if start == -1: return None
     text = text[start:]
     
-    # TENTATIVO 1: Parsing diretto (se è pulito)
+    # TENTATIVO 1: Parsing diretto
     try:
-        return json.loads(text) # Ritorna direttamente l'oggetto se funziona
+        return json.loads(text)
     except json.JSONDecodeError:
-        pass # Continua con la pulizia aggressiva
+        pass 
 
-    # TENTATIVO 2: Trova l'ultima graffa chiusa
+    # TENTATIVO 2: Trova l'ultima graffa chiusa (per ignorare testo finale)
     end = text.rfind('}')
-    if end == -1: return ""
-    
+    if end == -1: return None
     candidate = text[:end+1]
     
-    # Se fallisce ancora con "Extra data", significa che ci sono più oggetti {..} {..}
-    # Cerchiamo di parsare iterativamente trovando la chiusura logica
     try:
         return json.loads(candidate)
-    except json.JSONDecodeError as e:
-        if "Extra data" in str(e):
-            # Errore classico: c'è roba dopo il JSON valido. 
-            # Dobbiamo trovare dove finisce davvero il primo oggetto.
-            # Metodo euristico: contiamo le graffe.
-            balance = 0
-            for i, char in enumerate(text):
-                if char == '{': balance += 1
-                elif char == '}': balance -= 1
-                if balance == 0:
-                    # Trovata la fine del primo oggetto
+    except json.JSONDecodeError:
+        # TENTATIVO 3: Gestione "Extra data" (es. doppi JSON o testo sporco)
+        # Conta le parentesi per trovare la chiusura logica del primo oggetto
+        balance = 0
+        for i, char in enumerate(text):
+            if char == '{': balance += 1
+            elif char == '}': balance -= 1
+            if balance == 0:
+                try:
                     return json.loads(text[:i+1])
-        return None # Parsing fallito
+                except: break
+        return None
 
-# 2. CALCOLO PREZZI DINAMICO (Nuova Funzione)
+# --- 4. FUNZIONI DI CALCOLO COSTI ---
 def stima_costo_token(context_text, num_docs, pricing_row):
-    """
-    Calcola il prezzo preventivo basato sui token.
-    1 Token ~= 4 caratteri (approssimazione standard per stime)
-    """
-    if not pricing_row:
-        # Fallback se il DB è offline o vuoto
-        return 150.00 
+    """Calcola costo preventivo dinamico"""
+    if not pricing_row: return 150.00 # Fallback
     
-    # Prezzi dal DB (default a 0 se null)
     p_fisso = float(pricing_row.get('prezzo_fisso', 0) or 0)
-    p_in_1k = float(pricing_row.get('prezzo_per_1k_input_token', 0.02) or 0.02) # Esempio default OpenAI/Gemini
+    p_in_1k = float(pricing_row.get('prezzo_per_1k_input_token', 0.02) or 0.02)
     p_out_1k = float(pricing_row.get('prezzo_per_1k_output_token', 0.05) or 0.05)
-    moltiplicatore = float(pricing_row.get('moltiplicatore_complessita', 1.0) or 1.0)
+    molt = float(pricing_row.get('moltiplicatore_complessita', 1.0) or 1.0)
 
-    # Conteggio Input
-    len_input = len(context_text)
-    token_input_est = len_input / 4
+    # 1 Token ~= 4 caratteri
+    token_input_est = len(context_text) / 4
+    token_output_est = (num_docs * 2000) / 4 # 2k caratteri medi per doc
 
-    # Stima Output (Media 2000 caratteri per documento legale denso)
-    len_output_est = num_docs * 2000 
-    token_output_est = len_output_est / 4
-
-    # Calcolo
     costo_input = (token_input_est / 1000) * p_in_1k
     costo_output = (token_output_est / 1000) * p_out_1k
     
     totale = (costo_input + costo_output + p_fisso) * moltiplicatore
-    
-    # Arrotondamento (minimo 5 euro per evitare micro-transazioni ridicole)
     return max(5.0, round(totale, 2))
 
-# --- 3. GEMINI INIT & AUTO-DISCOVERY (NUOVO - Ottimizzato) ---
-def init_ai():
-    if "GOOGLE_API_KEY" in st.secrets:
-        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-        return True
-    return False
-
-def get_best_model():
-    """
-    Trova il miglior modello disponibile.
-    Sostituisce la logica duplicata nelle funzioni successive.
-    """
-    try:
-        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        if "models/gemini-1.5-flash" in models: return "models/gemini-1.5-flash"
-        if "models/gemini-1.5-pro" in models: return "models/gemini-1.5-pro"
-        if "models/gemini-pro" in models: return "models/gemini-pro"
-        return models[0] if models else None
-    except Exception as e:
-        return None
-
-# --- SOSTITUIRE LA FUNZIONE interroga_gemini IN ai_engine.py ---
-
+# --- 5. CHAT STRATEGICA (TAB 2) - FIX DICT/STR ---
 def interroga_gemini(model_name, prompt, context, file_parts, calc_data, sanitizer, pricing_info, aggression_level):
-    """
-    Gestisce la chat strategica (Tab 2).
-    """
-    # 1. Configurazione Modello e Sicurezza (PERMETTI TUTTO PER STRATEGIA LEGALE)
-    active_model = get_best_model() # Usa il modello disponibile (es. 1.5-flash)
+    
+    active_model = get_best_model()
     if not active_model: 
         return {"fase": "errore", "titolo": "Errore", "contenuto": "Nessun modello AI configurato."}
 
-    # Disabilitiamo i blocchi di sicurezza per permettere termini come "terrorizzare", "attacco", ecc.
+    # SAFETY SETTINGS: BLOCK_NONE per strategie legali aggressive
     safety_settings = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -140,18 +131,13 @@ def interroga_gemini(model_name, prompt, context, file_parts, calc_data, sanitiz
     ]
     
     generation_config = {
-        "temperature": 0.7 + (aggression_level * 0.03), # Più aggressivo = Più creativo
+        "temperature": 0.7 + (aggression_level * 0.03),
         "response_mime_type": "application/json"
     }
 
-    model = genai.GenerativeModel(
-        active_model, 
-        safety_settings=safety_settings,
-        generation_config=generation_config
-    )
+    model = genai.GenerativeModel(active_model, safety_settings=safety_settings, generation_config=generation_config)
 
-    # 2. Costruzione Prompt
-    full_payload = list(file_parts) # Copia lista parti (file caricati)
+    full_payload = list(file_parts)
     
     system_prompt = f"""
     RUOLO: Sei un Senior Legal Strategist spietato e calcolatore.
@@ -163,47 +149,32 @@ def interroga_gemini(model_name, prompt, context, file_parts, calc_data, sanitiz
     DATI TECNICI / NOTE:
     {calc_data}
     
-    BUDGET CLIENTE: {pricing_info} (Se budget 0, proponi soluzioni a costo zero).
+    BUDGET CLIENTE: {pricing_info}
     LIVELLO AGGRESSIVITÀ: {aggression_level}/10.
     
     ISTRUZIONI UTENTE: 
     "{prompt}"
     
-    OUTPUT RICHIESTO (FORMATO JSON UNICO):
+    OUTPUT RICHIESTO (SOLO JSON):
     {{
         "fase": "strategia", 
         "titolo": "Titolo Incisivo",
-        "contenuto": "Testo della risposta (usa Markdown, elenchi puntati, grassetti per i punti chiave)."
+        "contenuto": "Testo della risposta (Markdown supportato)."
     }}
-    NON AGGIUNGERE ALTRO TESTO FUORI DAL JSON.
     """
-    
     full_payload.append(system_prompt)
 
-    # 3. Chiamata AI e Gestione Errori
     try:
-        # Chiamata
         response = model.generate_content(full_payload)
         
-        # Gestione Safety Block (se la risposta è vuota nonostante BLOCK_NONE)
         if not response.parts:
-            return {
-                "fase": "errore", 
-                "titolo": "Blocco Sicurezza AI", 
-                "contenuto": f"L'AI ha rifiutato di rispondere. Motivo: {response.prompt_feedback}"
-            }
+            return {"fase": "errore", "titolo": "Blocco Sicurezza", "contenuto": str(response.prompt_feedback)}
 
-        # Parsing JSON (La funzione clean_json_text ora ritorna DICT o None)
-        raw_text = response.text
-        parsed = clean_json_text(raw_text)
+        # FIX: clean_json_text ritorna già un DICT, non usare json.loads qui!
+        parsed = clean_json_text(response.text)
         
-        # Se clean_json_text ha fallito (ritorna None), restituisci errore gestito
         if parsed is None:
-             return {
-                 "fase": "errore", 
-                 "titolo": "Errore Formattazione AI", 
-                 "contenuto": f"L'AI ha generato una risposta non strutturata correttamente.\n\nRaw output:\n{raw_text[:500]}..."
-             }
+             return {"fase": "errore", "titolo": "Errore Formato", "contenuto": f"Output AI non valido:\n{response.text[:300]}..."}
 
         # Privacy Restore
         if "contenuto" in parsed: parsed["contenuto"] = sanitizer.restore(parsed["contenuto"])
@@ -212,28 +183,19 @@ def interroga_gemini(model_name, prompt, context, file_parts, calc_data, sanitiz
         return parsed
 
     except Exception as e:
-        return {
-            "fase": "errore", 
-            "titolo": "Errore Tecnico", 
-            "contenuto": f"Dettaglio errore: {str(e)}"
-        }
-# 3. AGGIORNAMENTO GENERATORE BATCH (System Prompt Indurito)
+        return {"fase": "errore", "titolo": "Errore Tecnico", "contenuto": str(e)}
+
+# --- 6. GENERATORE BATCH (TAB 3) ---
 def genera_docs_json_batch(tasks, context_chat, file_parts, calc_data, model_name_ignored):
-    active_model = get_best_model() # Usa la tua funzione esistente
+    active_model = get_best_model()
     if not active_model: return {"Errore": {"titolo": "Errore", "contenuto": "Modello non trovato"}}
 
     results = {}
     model = genai.GenerativeModel(active_model, generation_config={"response_mime_type": "application/json"})
     
-    # Prompt di Sistema Rinforzato per JSON PURO
     system_instruction = """
-    SEI UN GENERATORE DI API JSON. 
-    IL TUO UNICO OUTPUT DEVE ESSERE UN OGGETTO JSON VALIDO.
-    NON SCRIVERE NULLA PRIMA DI '{'. 
-    NON SCRIVERE NULLA DOPO '}'.
-    NON USARE MARKDOWN.
-    NON SPIEGARE IL CODICE.
-    OUTPUT FORMAT: { "titolo": "...", "contenuto": "..." }
+    SEI UN GENERATORE DI API JSON. OUTPUT FORMAT: { "titolo": "...", "contenuto": "..." }
+    NON SCRIVERE TESTO FUORI DAL JSON.
     """
 
     for doc_name, task_prompt in tasks:
@@ -241,35 +203,26 @@ def genera_docs_json_batch(tasks, context_chat, file_parts, calc_data, model_nam
         
         prompt_specifico = f"""
         {system_instruction}
-        
         CONTESTO FASCICOLO: {context_chat}
         DATI TECNICI: {calc_data}
-        
         OBIETTIVO DOCUMENTO: {doc_name}
-        ISTRUZIONI DETTAGLIATE: {task_prompt}
+        ISTRUZIONI: {task_prompt}
         """
-        
         full_payload.append(prompt_specifico)
         
         try:
-            # Chiamata all'AI
             raw_response = model.generate_content(full_payload).text
-            
-            # Pulizia Avanzata
+            # clean_json_text ritorna dict
             cleaned_obj = clean_json_text(raw_response)
             
             if isinstance(cleaned_obj, dict):
                 results[doc_name] = cleaned_obj
             else:
-                # Fallback se il parsing fallisce ancora
                 results[doc_name] = {
-                    "titolo": f"Errore Formato {doc_name}", 
-                    "contenuto": f"L'AI ha generato un JSON non valido. Raw output: {raw_response[:200]}..."
+                    "titolo": f"Errore {doc_name}", 
+                    "contenuto": f"Formato non valido. Raw: {raw_response[:200]}..."
                 }
-
         except Exception as e:
             results[doc_name] = {"titolo": "Errore Tecnico", "contenuto": str(e)}
             
     return results
-
-# --- FINE MODIFICHE ---
