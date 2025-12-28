@@ -271,68 +271,109 @@ with t3:
                 st.session_state.workflow_step = "GENERATING"
                 st.rerun()
                 
-    # --- PROCESSO DI GENERAZIONE ---
+# --- IN app3.py, DENTRO 'with t3:' ---
+
+    # ... (Codice esistente selezione documenti) ...
+
+    st.markdown("---")
+    st.write("### 🧠 Intelligenza & Costi")
+    
+    # 1. SELECTBOX MODELLO (Dinamica dal DB)
+    active_models = database.get_active_gemini_models(supabase)
+    
+    # Mappa nomi visualizzati -> ID modello
+    # Esempio structure: {"Gemini Flash (Veloce)": "models/gemini-1.5-flash"}
+    if active_models:
+        map_models = {m['display_name']: m['model_name'] for m in active_models}
+        sel_label = st.selectbox("Seleziona Modello AI:", list(map_models.keys()))
+        SELECTED_MODEL_ID = map_models[sel_label]
+    else:
+        # Fallback se tabella vuota
+        st.warning("Listino modelli non trovato, uso default.")
+        SELECTED_MODEL_ID = "models/gemini-1.5-flash"
+
+    # ... (Codice esistente preventivo stimato visuale... puoi lasciarlo come stima) ...
+    
+    # --- PROCESSO DI GENERAZIONE MODIFICATO ---
     if st.session_state.workflow_step == "GENERATING":
         prog = st.progress(0, "Inizializzazione AI...")
         
-        # A. Preparazione Task
+        # A. Preparazione Task (come prima)
         tasks = []
         for d in sel:
             meta = config.DOCS_METADATA.get(d, "Documento legale professionale.")
             if d == custom_name and add_custom:
-                meta = "Genera il documento specifico richiesto dall'utente nella conversazione."
+                meta = "Genera il documento specifico richiesto..."
             tasks.append((d, meta))
             
         # B. Recupero Chat History
         hist_txt = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
         
-        # C. Generazione (AI Engine)
-        # Nota: file_parts viene passato vuoto qui, l'AI si basa sulla chat history che contiene tutto
+        # C. Generazione (Passando il MODELLO SELEZIONATO)
         res_docs = ai_engine.genera_docs_json_batch(
-            tasks, hist_txt, [], st.session_state.dati_calc, "models/gemini-1.5-flash"
+            tasks, hist_txt, [], st.session_state.dati_calc, SELECTED_MODEL_ID
         )
         
-        prog.progress(70, "Salvataggio Storico...")
+        prog.progress(60, "Calcolo Prezzi e Salvataggio...")
         
-        # D. Creazione Documento Trascrizione Chat (Feature Richiesta)
-        chat_doc_title = f"Trascrizione_Chat_{datetime.now().strftime('%d%m_%H%M')}"
-        chat_content_formatted = f"# TRASCRIZIONE SESSIONE DI LAVORO\nDATA: {datetime.now()}\n\n{hist_txt}"
-        res_docs[chat_doc_title] = {"titolo": chat_doc_title, "contenuto": chat_content_formatted}
-        
-        # E. Archiviazione nel DB (Append)
+        # D. Calcolo Pricing Reale e Aggiornamento DB
         if supabase:
-            database.archivia_generazione(supabase, f_curr['id'], res_docs)
-            # Aggiorniamo anche lo stato locale del fascicolo per vederli subito nel Tab 2
-            # (Ricarichiamo i dati freschi dal DB è più sicuro)
-            refreshed = supabase.table("fascicoli").select("*").eq("id", f_curr['id']).execute()
-            if refreshed.data:
-                st.session_state.current_fascicolo = refreshed.data[0]
+            # Recuperiamo storico attuale per appendere
+            # Nota: per semplicità facciamo una logica di update robusta
+            res_fascicolo = supabase.table("fascicoli").select("documenti_generati, costo_stimato").eq("id", f_curr['id']).execute()
+            current_docs = res_fascicolo.data[0].get("documenti_generati") or []
+            if not isinstance(current_docs, list): current_docs = []
             
+            current_cost = float(res_fascicolo.data[0].get("costo_stimato") or 0.0)
+            
+            # Iteriamo sui documenti generati dall'AI
+            for doc_key, doc_data in res_docs.items():
+                # Estraiamo le metriche che abbiamo iniettato in ai_engine
+                metrics = doc_data.pop("_metrics", {"tokens_input": 0, "tokens_output": 0})
+                
+                # Calcoliamo il prezzo preciso
+                prezzo_doc, snapshot_partial = database.registra_transazione_doc(
+                    supabase, 
+                    f_curr['id'], 
+                    doc_key, 
+                    SELECTED_MODEL_ID, 
+                    metrics['tokens_input'], 
+                    metrics['tokens_output']
+                )
+                
+                # Completiamo lo snapshot con il contenuto reale
+                snapshot_partial["contenuto"] = doc_data.get("contenuto", "")
+                
+                # Aggiungiamo alla lista e al totale
+                current_docs.append(snapshot_partial)
+                current_cost += prezzo_doc
+                
+            # Aggiungiamo anche la trascrizione chat (costo 0 o a piacere)
+            chat_doc_title = f"Trascrizione_Chat_{datetime.now().strftime('%d%m_%H%M')}"
+            current_docs.append({
+                "titolo": chat_doc_title,
+                "contenuto": f"# TRASCRIZIONE\n\n{hist_txt}",
+                "tipo": "trascrizione_chat",
+                "data_creazione": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "metadata_pricing": {"final_price": 0.0} # Gratis
+            })
+
+            # SALVATAGGIO UNICO NEL DB
+            supabase.table("fascicoli").update({
+                "documenti_generati": current_docs,
+                "costo_stimato": current_cost
+            }).eq("id", f_curr['id']).execute()
+            
+            # Refresh stato locale
+            st.session_state.current_fascicolo['documenti_generati'] = current_docs
+
         prog.progress(90, "Creazione ZIP...")
         st.session_state.generated_docs_zip = doc_renderer.create_zip(res_docs, st.session_state.sanitizer)
         
-        # F. Reset Sessione Chat
+        # F. Reset Sessione
         st.session_state.messages = [] 
         st.session_state.contesto_chat = ""
         st.session_state.workflow_step = "DONE"
         
         prog.progress(100, "Fatto!")
         st.rerun()
-
-    # --- ESITO FINALE ---
-    if st.session_state.workflow_step == "DONE":
-        st.success("✅ Sessione conclusa con successo!")
-        st.info("La chat è stata archiviata ed è scaricabile nel Tab 2 insieme ai documenti.")
-        
-        if st.session_state.generated_docs_zip:
-            st.download_button(
-                "📦 SCARICA ZIP ORA", 
-                st.session_state.generated_docs_zip.getvalue(), 
-                f"Fascicolo_{f_curr['nome_riferimento']}_Sessione.zip", 
-                "application/zip", 
-                type="primary"
-            )
-            
-        if st.button("🔄 Avvia Nuova Sessione di Chat"):
-            st.session_state.workflow_step = "CHAT"
-            st.rerun()
