@@ -1,7 +1,7 @@
 # modules/config.py
 
 APP_NAME = "LexVantage"
-APP_VER = "Rev 50.4 (Modular)"
+APP_VER = "Rev 50.5 (Case Management & Adaptive AI)" # <--- AGGIORNATO
 
 # Fallback Pricing (se DB offline)
 PRICING_CONFIG_FALLBACK = {
@@ -9,7 +9,7 @@ PRICING_CONFIG_FALLBACK = {
     "descrizione": "Include: Sintesi Strategica, Matrice Rischi, Nota Difensiva, Quesiti Tecnici, Bozza Transazione."
 }
 
-# Fallback Tipi Causa (se DB offline)
+# Fallback Tipi Causa
 CASE_TYPES_FALLBACK = {
     "immobiliare": {
         "label": "🏗️ Immobiliare & Vizi", 
@@ -25,19 +25,18 @@ CASE_TYPES_FALLBACK = {
     }
 }
 
-# Metadati Documenti (Descrizioni per l'AI)
 DOCS_METADATA = {
-    "Sintesi": "Sintesi Esecutiva e Strategica (per il Cliente)",
-    "Matrice_Rischi": "Matrice dei Rischi Economici (Tabella)",
-    "Nota_Difensiva": "Nota Difensiva Aggressiva (per il Giudice)",
-    "Quesiti_CTU": "Quesiti Tecnici Demolitori per il CTU",
+    "Sintesi": "Sintesi Esecutiva e Strategica",
+    "Matrice_Rischi": "Matrice dei Rischi Economici",
+    "Nota_Difensiva": "Nota Difensiva Aggressiva",
+    "Quesiti_CTU": "Quesiti Tecnici Demolitori",
     "Bozza_Transazione": "Bozza Accordo Transattivo",
-    "Analisi_Danno_Biologico": "Valutazione Danno Biologico e Morale",
-    "Relazione_Nesso_Causale": "Analisi Medico-Legale Nesso Causale",
-    "Richiesta_Risarcitoria": "Lettera di Richiesta Danni",
-    "Analisi_Cronoprogramma": "Analisi Ritardi e Cronoprogramma",
-    "Registro_Riserve": "Esplicazione Riserve Contabili",
-    "Contestazione_Vizi": "Lettera Contestazione Vizi Opere",
-    "Diffida_Adempiere": "Diffida ad Adempiere ex art. 1454 cc",
-    "Trascrizione_Chat": "Cronologia Completa Analisi AI"
+    "Analisi_Danno_Biologico": "Valutazione Danno Biologico",
+    "Relazione_Nesso_Causale": "Analisi Nesso Causale",
+    "Richiesta_Risarcitoria": "Lettera Richiesta Danni",
+    "Analisi_Cronoprogramma": "Analisi Ritardi",
+    "Registro_Riserve": "Esplicazione Riserve",
+    "Contestazione_Vizi": "Contestazione Vizi",
+    "Diffida_Adempiere": "Diffida ad Adempiere",
+    "Trascrizione_Chat": "Cronologia Completa"
 }
