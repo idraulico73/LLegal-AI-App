@@ -119,23 +119,23 @@ PAYMENT_ENABLED = False
 EMAIL_ENABLED = False
 
 # AUTO-DISCOVERY MODELLO (Logica Rev 48 Ripristinata)
-        try:
-            lista_modelli = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            
-            # Ordine di preferenza: CERCA PRIMA IL PRO (Più intelligente), POI IL FLASH
-            if "models/gemini-1.5-pro" in lista_modelli: 
-                active_model = "models/gemini-1.5-pro"
-            elif "models/gemini-1.5-pro-latest" in lista_modelli: 
-                active_model = "models/gemini-1.5-pro-latest"
-            elif "models/gemini-1.5-flash" in lista_modelli: 
-                active_model = "models/gemini-1.5-flash"
-            else:
-                active_model = lista_modelli[0]
-                
-            print(f"Modello AI selezionato: {active_model}")
+try:
+    lista_modelli = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+    
+    # Ordine di preferenza: CERCA PRIMA IL PRO (Più intelligente), POI IL FLASH
+    if "models/gemini-1.5-pro" in lista_modelli: 
+        active_model = "models/gemini-1.5-pro"
+    elif "models/gemini-1.5-pro-latest" in lista_modelli: 
+        active_model = "models/gemini-1.5-pro-latest"
+    elif "models/gemini-1.5-flash" in lista_modelli: 
+        active_model = "models/gemini-1.5-flash"
+    else:
+        active_model = lista_modelli[0]
+        
+    print(f"Modello AI selezionato: {active_model}")
 
-        except Exception as e:
-            active_model = "models/gemini-1.5-flash" # Fallback estremo
+except Exception as e:
+    active_model = "models/gemini-1.5-flash" # Fallback estremo
 
 # ==============================================================================
 # 3. CORE LOGIC: PRIVACY & FORMATTAZIONE (DALLA REV 48)
@@ -847,4 +847,5 @@ else:
                     mime="application/zip",
                     type="primary"
                 )
+
 
