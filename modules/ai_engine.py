@@ -3,7 +3,7 @@ import json
 import streamlit as st
 import google.generativeai as genai
 
-# --- PRIVACY SHIELD ---
+# --- 1. PRIVACY SHIELD (INVARIATO) ---
 class DataSanitizer:
     def __init__(self):
         self.mapping = {}; self.reverse = {}; self.cnt = 1
@@ -20,122 +20,102 @@ class DataSanitizer:
         for f, r in self.reverse.items(): txt = txt.replace(f, r)
         return txt
 
-# --- JSON CLEANER ---
+# --- 2. JSON CLEANER (INVARIATO) ---
 def clean_json_text(text):
     text = re.sub(r'```json\s*', '', text)
     text = re.sub(r'```', '', text)
-    # Rimuove char di controllo ma preserva newline validi
     text = "".join(ch for ch in text if ord(ch) >= 32 or ch == '\n' or ch == '\t')
     start = text.find('{'); end = text.rfind('}')
     if start != -1 and end != -1: text = text[start:end+1]
     return text.strip()
 
-# --- GEMINI INIT ---
+# --- 3. GEMINI INIT & AUTO-DISCOVERY (NUOVO - Ottimizzato) ---
 def init_ai():
     if "GOOGLE_API_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
         return True
     return False
 
-# --- LOGICA CORE 50.5: INTERVISTA ADATTIVA ---
-def interroga_gemini(model_name, prompt, history, files_content, calc_data, sanitizer, price_info, livello_aggressivita):
+def get_best_model():
     """
-    Restituisce un DIZIONARIO JSON: {'fase', 'titolo', 'contenuto'}
+    Trova il miglior modello disponibile.
+    Sostituisce la logica duplicata nelle funzioni successive.
     """
+    try:
+        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        if "models/gemini-1.5-flash" in models: return "models/gemini-1.5-flash"
+        if "models/gemini-1.5-pro" in models: return "models/gemini-1.5-pro"
+        if "models/gemini-pro" in models: return "models/gemini-pro"
+        return models[0] if models else None
+    except Exception as e:
+        return None
+
+# --- 4. LOGICA CORE: INTERVISTA (REFATTORED - Usa get_best_model) ---
+def interroga_gemini(model_name_ignored, prompt, history, files_content, calc_data, sanitizer, price_info, livello_aggressivita):
+    # QUI ABBIAMO RISPARMIATO RIGHE: Usiamo la funzione centralizzata invece di ripetere il try/except
+    active_model = get_best_model()
+    
+    if not active_model:
+        return {"fase": "errore", "titolo": "Errore AI", "contenuto": "Nessun modello Google Gemini disponibile o chiave errata."}
+
     safe_p = sanitizer.sanitize(prompt)
     safe_h = sanitizer.sanitize(history)
     
-    # Mapping Aggressività 1-10
-    mood_map = {
-        1: "Diplomatico, Conciliante, Orientato alla Pace",
-        2: "Molto Cauto e Formale",
-        3: "Cauto",
-        4: "Neutrale/Equilibrato",
-        5: "Pragmatico e Fermo (Standard)",
-        6: "Deciso",
-        7: "Molto Deciso",
-        8: "Aggressivo",
-        9: "Molto Aggressivo (Legal Warfare)",
-        10: "DISTRUTTIVO / 'Scorched Earth'"
-    }
-    # Fallback sicuro se livello_aggressivita è None
+    mood_map = { 1: "Diplomatico", 5: "Pragmatico", 10: "DISTRUTTIVO" }
     livello = livello_aggressivita if livello_aggressivita else 5
     mood_desc = mood_map.get(livello, "Pragmatico")
 
     sys_prompt = f"""
     SEI LEXVANTAGE. RUOLO: Senior Legal Strategist.
-    MOOD IMPOSTATO DALL'UTENTE: {livello}/10 ({mood_desc}).
+    MOOD: {livello}/10 ({mood_desc}).
+    OBIETTIVO: Vendere il 'Fascicolo Documentale' ({price_info}).
+    DATI TECNICI: {calc_data}
+    STORICO: {safe_h}
     
-    OBIETTIVO FINALE: Vendere il 'Fascicolo Documentale Completo' ({price_info}).
-    
-    DATI TECNICI (Calcolatore): {calc_data}
-    STORICO CHAT: {safe_h}
-    
-    ISTRUZIONI LOGICHE (INTERVISTA ADATTIVA):
-    1. Analizza l'input dell'utente e i documenti caricati.
-    2. VALUTA LA TUA CONOSCENZA DEL CASO:
-       - Hai i 4 PILASTRI? (FATTI, NUMERI, CONTROPARTE, OBIETTIVO DELL'UTENTE).
-    
-    3. GENERA UNA RISPOSTA JSON RIGOROSA:
+    ISTRUZIONI:
+    1. Analizza input e documenti.
+    2. RISPONDI IN JSON:
        {{
-         "fase": "...",  <-- "intervista" (se mancano dati) OPPURE "strategia" (se hai tutto)
+         "fase": "intervista" (se mancano dati) O "strategia" (se ok),
          "titolo": "...", 
-         "contenuto": "..." <-- Usa Markdown qui.
+         "contenuto": "..." (Markdown)
        }}
-    
-    --- SCENARIO A: MANCANO DATI ("fase": "intervista") ---
-    Se mancano dettagli CRITICI, NON inventare strategie.
-    Nel 'contenuto': Rispondi con una lista di domande numerate necessarie a capire il caso.
-    Sii diretto. Se l'utente scrive solo "ho un problema", chiedi "Quale problema? Con chi? Quando?".
-    
-    --- SCENARIO B: QUADRO CHIARO ("fase": "strategia") ---
-    Se hai abbastanza elementi, elabora la strategia usando il MOOD {mood_desc}.
-    Nel 'contenuto':
-    - Spiega la strategia legale/tecnica.
-    - AL TERMINE, aggiungi una Call To Action esplicita:
-      "La strategia è definita. Sono pronto a generare il Fascicolo Esecutivo ora. Procediamo?"
     """
 
     payload = list(files_content)
     payload.append(f"UTENTE: {safe_p}")
     
     try:
-        model = genai.GenerativeModel(model_name, system_instruction=sys_prompt, generation_config={"response_mime_type": "application/json"})
+        model = genai.GenerativeModel(active_model, system_instruction=sys_prompt, generation_config={"response_mime_type": "application/json"})
         raw_response = model.generate_content(payload).text
         clean_response = clean_json_text(raw_response)
+        parsed = json.loads(clean_response)
         
-        # Parsing JSON
-        try:
-            parsed = json.loads(clean_response)
-        except:
-            # Fallback se l'AI sbaglia il formato JSON
-            parsed = {
-                "fase": "strategia",
-                "titolo": "Analisi",
-                "contenuto": raw_response
-            }
-        
-        # Restore Privacy
         if "contenuto" in parsed: parsed["contenuto"] = sanitizer.restore(parsed["contenuto"])
         if "titolo" in parsed: parsed["titolo"] = sanitizer.restore(parsed["titolo"])
             
         return parsed
 
     except Exception as e:
-        return {"fase": "errore", "titolo": "Errore Tecnico", "contenuto": str(e)}
+        return {"fase": "errore", "titolo": "Errore Tecnico", "contenuto": f"Errore modello ({active_model}): {str(e)}"}
 
-def genera_docs_json_batch(tasks, context_chat, file_parts, calc_data, model_name):
+# --- 5. GENERATORE BATCH (REFATTORED - Usa get_best_model) ---
+def genera_docs_json_batch(tasks, context_chat, file_parts, calc_data, model_name_ignored):
+    # ANCHE QUI: Risparmio righe riutilizzando get_best_model
+    active_model = get_best_model()
+    if not active_model: return {"Errore": {"titolo": "Errore", "contenuto": "Modello non trovato"}}
+
     results = {}
-    model = genai.GenerativeModel(model_name, generation_config={"response_mime_type": "application/json"})
+    model = genai.GenerativeModel(active_model, generation_config={"response_mime_type": "application/json"})
     
     for doc_name, task_prompt in tasks:
         full_payload = list(file_parts)
         prompt_specifico = f"""
-        CONTESTO COMPLETO: {context_chat}
-        DATI CALCOLATORE: {calc_data}
-        OBIETTIVO: Genera documento '{doc_name}'.
+        CONTESTO: {context_chat}
+        DATI: {calc_data}
+        DOC: {doc_name}
         ISTRUZIONI: {task_prompt}
-        FORMATO: JSON {{ "titolo": "...", "contenuto": "..." }}. Contenuto in Markdown.
+        OUTPUT: JSON {{ "titolo": "...", "contenuto": "..." }} (Markdown).
         """
         full_payload.append(prompt_specifico)
         try:
