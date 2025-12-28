@@ -2,6 +2,7 @@ import re
 import json
 import streamlit as st
 import google.generativeai as genai
+import logging
 
 # --- 1. PRIVACY SHIELD (INVARIATO) ---
 class DataSanitizer:
@@ -20,14 +21,83 @@ class DataSanitizer:
         for f, r in self.reverse.items(): txt = txt.replace(f, r)
         return txt
 
-# --- 2. JSON CLEANER (INVARIATO) ---
+# 1. FUNZIONE CLEAN JSON PIÙ ROBUSTA
 def clean_json_text(text):
+    """
+    Pulisce il testo da markdown e tenta di estrarre UN SOLO oggetto JSON valido.
+    Gestisce il caso 'Extra data' troncando il testo dopo la chiusura corretta.
+    """
+    # Rimuovi markdown code blocks
     text = re.sub(r'```json\s*', '', text)
     text = re.sub(r'```', '', text)
-    text = "".join(ch for ch in text if ord(ch) >= 32 or ch == '\n' or ch == '\t')
-    start = text.find('{'); end = text.rfind('}')
-    if start != -1 and end != -1: text = text[start:end+1]
-    return text.strip()
+    
+    # Trova la prima graffa aperta
+    start = text.find('{')
+    if start == -1: return ""
+    text = text[start:]
+    
+    # TENTATIVO 1: Parsing diretto (se è pulito)
+    try:
+        return json.loads(text) # Ritorna direttamente l'oggetto se funziona
+    except json.JSONDecodeError:
+        pass # Continua con la pulizia aggressiva
+
+    # TENTATIVO 2: Trova l'ultima graffa chiusa
+    end = text.rfind('}')
+    if end == -1: return ""
+    
+    candidate = text[:end+1]
+    
+    # Se fallisce ancora con "Extra data", significa che ci sono più oggetti {..} {..}
+    # Cerchiamo di parsare iterativamente trovando la chiusura logica
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError as e:
+        if "Extra data" in str(e):
+            # Errore classico: c'è roba dopo il JSON valido. 
+            # Dobbiamo trovare dove finisce davvero il primo oggetto.
+            # Metodo euristico: contiamo le graffe.
+            balance = 0
+            for i, char in enumerate(text):
+                if char == '{': balance += 1
+                elif char == '}': balance -= 1
+                if balance == 0:
+                    # Trovata la fine del primo oggetto
+                    return json.loads(text[:i+1])
+        return None # Parsing fallito
+
+# 2. CALCOLO PREZZI DINAMICO (Nuova Funzione)
+def stima_costo_token(context_text, num_docs, pricing_row):
+    """
+    Calcola il prezzo preventivo basato sui token.
+    1 Token ~= 4 caratteri (approssimazione standard per stime)
+    """
+    if not pricing_row:
+        # Fallback se il DB è offline o vuoto
+        return 150.00 
+    
+    # Prezzi dal DB (default a 0 se null)
+    p_fisso = float(pricing_row.get('prezzo_fisso', 0) or 0)
+    p_in_1k = float(pricing_row.get('prezzo_per_1k_input_token', 0.02) or 0.02) # Esempio default OpenAI/Gemini
+    p_out_1k = float(pricing_row.get('prezzo_per_1k_output_token', 0.05) or 0.05)
+    moltiplicatore = float(pricing_row.get('moltiplicatore_complessita', 1.0) or 1.0)
+
+    # Conteggio Input
+    len_input = len(context_text)
+    token_input_est = len_input / 4
+
+    # Stima Output (Media 2000 caratteri per documento legale denso)
+    len_output_est = num_docs * 2000 
+    token_output_est = len_output_est / 4
+
+    # Calcolo
+    costo_input = (token_input_est / 1000) * p_in_1k
+    costo_output = (token_output_est / 1000) * p_out_1k
+    
+    totale = (costo_input + costo_output + p_fisso) * moltiplicatore
+    
+    # Arrotondamento (minimo 5 euro per evitare micro-transazioni ridicole)
+    return max(5.0, round(totale, 2))
 
 # --- 3. GEMINI INIT & AUTO-DISCOVERY (NUOVO - Ottimizzato) ---
 def init_ai():
@@ -99,30 +169,59 @@ def interroga_gemini(model_name_ignored, prompt, history, files_content, calc_da
     except Exception as e:
         return {"fase": "errore", "titolo": "Errore Tecnico", "contenuto": f"Errore modello ({active_model}): {str(e)}"}
 
-# --- 5. GENERATORE BATCH (REFATTORED - Usa get_best_model) ---
+# 3. AGGIORNAMENTO GENERATORE BATCH (System Prompt Indurito)
 def genera_docs_json_batch(tasks, context_chat, file_parts, calc_data, model_name_ignored):
-    # ANCHE QUI: Risparmio righe riutilizzando get_best_model
-    active_model = get_best_model()
+    active_model = get_best_model() # Usa la tua funzione esistente
     if not active_model: return {"Errore": {"titolo": "Errore", "contenuto": "Modello non trovato"}}
 
     results = {}
     model = genai.GenerativeModel(active_model, generation_config={"response_mime_type": "application/json"})
     
+    # Prompt di Sistema Rinforzato per JSON PURO
+    system_instruction = """
+    SEI UN GENERATORE DI API JSON. 
+    IL TUO UNICO OUTPUT DEVE ESSERE UN OGGETTO JSON VALIDO.
+    NON SCRIVERE NULLA PRIMA DI '{'. 
+    NON SCRIVERE NULLA DOPO '}'.
+    NON USARE MARKDOWN.
+    NON SPIEGARE IL CODICE.
+    OUTPUT FORMAT: { "titolo": "...", "contenuto": "..." }
+    """
+
     for doc_name, task_prompt in tasks:
         full_payload = list(file_parts)
+        
         prompt_specifico = f"""
-        CONTESTO: {context_chat}
-        DATI: {calc_data}
-        DOC: {doc_name}
-        ISTRUZIONI: {task_prompt}
-        OUTPUT: JSON {{ "titolo": "...", "contenuto": "..." }} (Markdown).
+        {system_instruction}
+        
+        CONTESTO FASCICOLO: {context_chat}
+        DATI TECNICI: {calc_data}
+        
+        OBIETTIVO DOCUMENTO: {doc_name}
+        ISTRUZIONI DETTAGLIATE: {task_prompt}
         """
+        
         full_payload.append(prompt_specifico)
+        
         try:
-            raw = model.generate_content(full_payload).text
-            clean = clean_json_text(raw)
-            parsed = json.loads(clean)
-            results[doc_name] = parsed
+            # Chiamata all'AI
+            raw_response = model.generate_content(full_payload).text
+            
+            # Pulizia Avanzata
+            cleaned_obj = clean_json_text(raw_response)
+            
+            if isinstance(cleaned_obj, dict):
+                results[doc_name] = cleaned_obj
+            else:
+                # Fallback se il parsing fallisce ancora
+                results[doc_name] = {
+                    "titolo": f"Errore Formato {doc_name}", 
+                    "contenuto": f"L'AI ha generato un JSON non valido. Raw output: {raw_response[:200]}..."
+                }
+
         except Exception as e:
-            results[doc_name] = {"titolo": f"Errore {doc_name}", "contenuto": str(e)}
+            results[doc_name] = {"titolo": "Errore Tecnico", "contenuto": str(e)}
+            
     return results
+
+# --- FINE MODIFICHE ---
