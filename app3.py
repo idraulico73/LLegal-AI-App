@@ -61,6 +61,7 @@ if not st.session_state.current_fascicolo:
 f_curr = st.session_state.current_fascicolo
 if f_curr is None: st.rerun()
 
+# Recupero prezzo base per visualizzazione sidebar
 price_info = database.get_pricing(supabase)
 prezzo_txt = f"€ {price_info['prezzo_fisso']}" if price_info else "€ 150.00"
 
@@ -90,7 +91,10 @@ with st.sidebar:
 # TABS PRINCIPALI
 t1, t2, t3 = st.tabs(["🧮 1. Calcoli & Fatti", "💬 2. Strategia", "📦 3. Documenti"])
 
-# TAB 1: CALCOLATORE (RIPRISTINATO)
+# Variabile per condividere i file tra i tab (se caricati)
+file_parts_global = []
+
+# TAB 1: CALCOLATORE
 with t1:
     st.header("Inquadramento Economico")
     c1, c2 = st.columns(2)
@@ -113,7 +117,6 @@ with t1:
     note_txt = st.text_area("Note Tecniche (Vizi, Date, Difformità)", value=current_calc, height=150)
     
     if st.button("💾 Salva Dati Tecnici"):
-        # Costruiamo una stringa ricca per l'AI
         final_calc_str = f"""
         DATI ECONOMICI:
         - Valore CTU/Richiesta: € {val_ctu}
@@ -128,13 +131,15 @@ with t1:
             database.aggiorna_fascicolo(supabase, f_curr['id'], {"dati_tecnici": final_calc_str})
             st.success("Dati aggiornati e salvati.")
 
-# TAB 2: CHAT
+# TAB 2: CHAT STRATEGICA
 with t2:
     st.header("Analisi Strategica")
     uploaded = st.file_uploader("Carica documenti", accept_multiple_files=True)
     
-    # FIX ERRORE: Chiamata corretta alla funzione nel modulo
+    # Estrazione testo
     file_parts, full_txt = doc_renderer.extract_text_from_files(uploaded)
+    if file_parts:
+        file_parts_global = file_parts # Salviamo per eventuale uso
     
     for m in st.session_state.messages:
         with st.chat_message(m["role"]): st.markdown(m["content"])
@@ -161,51 +166,47 @@ with t2:
             if resp_data.get("titolo"): st.markdown(f"### {resp_data['titolo']}")
             st.markdown(ai_content)
             
+            # Se la fase è 'strategia' o se l'utente ha confermato esplicitamente
             if ai_phase == "strategia":
                 st.success("💡 Strategia Definita.")
-                if st.button("✅ VAI ALLA GENERAZIONE", key="smart_btn"):
+                if st.button("✅ VAI ALLA GENERAZIONE", key="smart_btn_strategy"):
                     st.session_state.workflow_step = "PAYMENT"
                     st.rerun()
 
-# TAB 3: GENERAZIONE
+# TAB 3: GENERAZIONE DOCUMENTI
 with t3:
     st.header("Generazione")
-    if st.session_state.workflow_step == "PAYMENT":
-        st.warning(f"Sblocca il fascicolo per {prezzo_txt}")
+    
+    if st.session_state.workflow_step == "CHAT":
+         st.info("Completa l'analisi nel Tab 2 per sbloccare la generazione.")
+
+    elif st.session_state.workflow_step == "PAYMENT":
+        st.warning(f"Sblocca il fascicolo. Prezzo base indicativo: {prezzo_txt}")
         if st.button("💳 Simula Pagamento"):
             st.session_state.workflow_step = "UNLOCKED"
             st.rerun()
             
     elif st.session_state.workflow_step == "UNLOCKED":
-    # In app3.py, dentro: elif st.session_state.workflow_step == "UNLOCKED":
-
         st.success("Analisi Completata. Generazione Documenti Abilitata.")
-    
-        # --- LOGICA RECUPERO DATI ---
-        # Recupera info dal DB o Fallback
+        
+        # Recupera info
         materia = f_curr.get('tipo_causa', 'immobiliare')
-    
-        # Se il DB è connesso, prendiamo i documenti veri, altrimenti fallback
         doc_list_info = config.CASE_TYPES_FALLBACK.get(materia, config.CASE_TYPES_FALLBACK['immobiliare'])
         doc_options = doc_list_info['docs']
-    
-        # Selezione Documenti
+        
+        # Selezione
         sel = st.multiselect("Seleziona i documenti da generare:", doc_options, default=doc_options)
-    
-        # --- NUOVA LOGICA PREZZO DINAMICO ---
-        pricing_row = database.get_pricing(supabase) # Recupera riga listino dal DB
-    
-        # Calcoliamo il contesto totale (Chat + File caricati)
-        # Nota: st.session_state.contesto_chat potrebbe non essere tutto, uniamo la history
+        
+        # --- PREZZO DINAMICO ---
+        pricing_row = database.get_pricing(supabase)
         chat_history_txt = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
-    
-        # Stima costo
+        
         costo_stimato = ai_engine.stima_costo_token(
-             context_text=chat_history_txt, 
+            context_text=chat_history_txt, 
             num_docs=len(sel), 
             pricing_row=pricing_row
         )
-    
+        
         # Visualizza Prezzo
         col_price, col_btn = st.columns([1, 2])
         with col_price:
@@ -218,20 +219,29 @@ with t3:
         with col_btn:
             st.write("") # Spacer
             if st.button("🚀 PAGA E GENERA", type="primary", use_container_width=True):
-
                 prog = st.progress(0, "Generazione..."); 
                 tasks = [(d, config.DOCS_METADATA.get(d, "")) for d in sel]
                 hist = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
-            
-                res = ai_engine.genera_docs_json_batch(tasks, hist, file_parts, st.session_state.dati_calc, "models/gemini-1.5-flash")
+                
+                # Nota: file_parts qui potrebbe essere vuoto se non ricaricato, ma l'AI ha la history
+                # Passiamo file_parts_global o lista vuota
+                res = ai_engine.genera_docs_json_batch(
+                    tasks, hist, [], st.session_state.dati_calc, "models/gemini-1.5-flash"
+                )
+                
                 prog.progress(90, "Zip...")
                 st.session_state.generated_docs_zip = doc_renderer.create_zip(res, st.session_state.sanitizer)
-            
-            if supabase:
-                database.aggiorna_fascicolo(supabase, f_curr['id'], {"documenti_generati": json.dumps(res)})
-            prog.progress(100, "Fatto!")
+                
+                if supabase:
+                    database.aggiorna_fascicolo(supabase, f_curr['id'], {"documenti_generati": json.dumps(res)})
+                prog.progress(100, "Fatto!")
 
-            if st.session_state.generated_docs_zip:
-                st.download_button("📦 SCARICA ZIP", st.session_state.generated_docs_zip.getvalue(), f"Fascicolo_{f_curr['nome_riferimento']}.zip", "application/zip", type="primary")
-        else:
-            st.info("Completa l'analisi nel Tab 2.")
+        # Download ZIP
+        if st.session_state.generated_docs_zip:
+            st.download_button(
+                "📦 SCARICA ZIP", 
+                st.session_state.generated_docs_zip.getvalue(), 
+                f"Fascicolo_{f_curr['nome_riferimento']}.zip", 
+                "application/zip", 
+                type="primary"
+            )
