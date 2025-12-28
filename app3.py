@@ -134,6 +134,33 @@ with t1:
 # TAB 2: CHAT STRATEGICA
 with t2:
     st.header("Analisi Strategica")
+    # --- INSERIRE IN app3.py DENTRO 'with t2:' ---
+    
+    # VISUALIZZATORE STORICO (Nuova Feature)
+    storico_docs = f_curr.get('documenti_generati')
+    if storico_docs and isinstance(storico_docs, list) and len(storico_docs) > 0:
+        with st.expander("🗄️ Archivio Documenti Generati (Sessioni Precedenti)", expanded=False):
+            st.caption("Documenti e Trascrizioni Chat salvati.")
+            # Mostriamo dal più recente
+            for doc in reversed(storico_docs):
+                col_d1, col_d2 = st.columns([4, 1])
+                icon = "💬" if doc.get('tipo') == 'trascrizione_chat' else "📄"
+                
+                # Titolo e Data
+                lbl = f"{icon} **{doc.get('titolo')}**"
+                if 'data_creazione' in doc: lbl += f" - *{doc['data_creazione']}*"
+                col_d1.markdown(lbl)
+                
+                # Download Button Diretto
+                col_d2.download_button(
+                    label="Scarica",
+                    data=doc.get('contenuto', ''),
+                    file_name=f"{doc.get('titolo')}.txt", # Upgrade futuro: converti in docx al volo se serve
+                    key=f"hist_{doc.get('titolo')}_{doc.get('data_creazione')}"
+                )
+        st.divider()
+    
+    # ... (qui sotto continua il codice esistente 'uploaded = st.file_uploader...') ...
     uploaded = st.file_uploader("Carica documenti", accept_multiple_files=True)
     
     # Estrazione testo
@@ -174,74 +201,138 @@ with t2:
                     st.rerun()
 
 # TAB 3: GENERAZIONE DOCUMENTI
-with t3:
-    st.header("Generazione")
-    
-    if st.session_state.workflow_step == "CHAT":
-         st.info("Completa l'analisi nel Tab 2 per sbloccare la generazione.")
+# --- SOSTITUIRE TUTTO IL BLOCCO 'with t3:' IN app3.py ---
 
-    elif st.session_state.workflow_step == "PAYMENT":
-        st.warning(f"Sblocca il fascicolo. Prezzo base indicativo: {prezzo_txt}")
-        if st.button("💳 Simula Pagamento"):
-            st.session_state.workflow_step = "UNLOCKED"
-            st.rerun()
+with t3:
+    st.header("Generazione e Chiusura Sessione")
+    
+    # 1. Recupero Tipi Documento
+    materia = f_curr.get('tipo_causa', 'immobiliare')
+    # Fallback sicuro se la materia non esiste nel config
+    if materia not in config.CASE_TYPES_FALLBACK: materia = 'immobiliare'
+    
+    doc_list_info = config.CASE_TYPES_FALLBACK[materia]
+    default_docs = doc_list_info['docs']
+    
+    # 2. Selezione Documenti
+    st.info("Seleziona i documenti da produrre in questa sessione.")
+    sel = st.multiselect("Documenti Standard:", default_docs, default=default_docs)
+    
+    # Checkbox per documenti dinamici (Feature 'Jolly')
+    add_custom = st.checkbox("Aggiungi documento su richiesta (es. Diffida specifica)")
+    custom_name = "Documento_Dinamico"
+    if add_custom:
+        custom_name_input = st.text_input("Nome Documento Personalizzato", value="Diffida_Ad_Hoc")
+        custom_name = custom_name_input
+        if custom_name not in sel:
+            sel.append(custom_name)
+
+    # 3. CALCOLO PREVENTIVO DINAMICO & GRANULARE
+    # Recuperiamo tutto il listino
+    listino = database.get_listino_completo(supabase)
+    
+    totale_stimato = 0.0
+    dettaglio_costi = []
+    
+    for d_name in sel:
+        # Logica di matching prezzo:
+        # 1. Cerca il nome esatto (es. "Sintesi")
+        # 2. Se è il custom, cerca "Documento_Dinamico"
+        # 3. Altrimenti usa "pacchetto_base" o valori default
+        
+        row = listino.get(d_name)
+        if not row and d_name == custom_name: row = listino.get("Documento_Dinamico")
+        
+        # Valori default se DB vuoto
+        p_fisso = float(row.get('prezzo_fisso', 0)) if row else 50.0
+        p_out_1k = float(row.get('prezzo_per_1k_output_token', 0.05)) if row else 0.05
+        molt = float(row.get('moltiplicatore_complessita', 1.0)) if row else 1.0
+        
+        # Stima: 1 pagina densa ~ 2000 caratteri ~ 500 token output
+        costo_doc = p_fisso + ((2000/1000) * 0.25 * p_out_1k * molt) # 0.25 è ratio char/token approx
+        # Semplificazione: usiamo un fisso + variabile stimata
+        costo_doc = max(p_fisso + 2.0, 10.0) # Floor minimo di 10 euro a doc per sicurezza demo
+        
+        totale_stimato += costo_doc
+        dettaglio_costi.append(f"- {d_name}: € {costo_doc:.2f}")
+
+    # Visualizza Preventivo
+    st.markdown("---")
+    c_p1, c_p2 = st.columns([1,1])
+    with c_p1:
+        st.write("### 🧾 Preventivo Sessione")
+        for line in dettaglio_costi: st.caption(line)
+        st.markdown(f"#### TOTALE STIMATO: € {totale_stimato:.2f}")
+    
+    with c_p2:
+        if st.session_state.workflow_step == "CHAT":
+            st.warning("⚠️ Attenzione: La generazione salverà i documenti e ARCHIVIERÀ la chat attuale.")
+            if st.button("💳 CONFERMA E GENERA", type="primary", use_container_width=True):
+                st.session_state.workflow_step = "GENERATING"
+                st.rerun()
+                
+    # --- PROCESSO DI GENERAZIONE ---
+    if st.session_state.workflow_step == "GENERATING":
+        prog = st.progress(0, "Inizializzazione AI...")
+        
+        # A. Preparazione Task
+        tasks = []
+        for d in sel:
+            meta = config.DOCS_METADATA.get(d, "Documento legale professionale.")
+            if d == custom_name and add_custom:
+                meta = "Genera il documento specifico richiesto dall'utente nella conversazione."
+            tasks.append((d, meta))
             
-    elif st.session_state.workflow_step == "UNLOCKED":
-        st.success("Analisi Completata. Generazione Documenti Abilitata.")
+        # B. Recupero Chat History
+        hist_txt = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
         
-        # Recupera info
-        materia = f_curr.get('tipo_causa', 'immobiliare')
-        doc_list_info = config.CASE_TYPES_FALLBACK.get(materia, config.CASE_TYPES_FALLBACK['immobiliare'])
-        doc_options = doc_list_info['docs']
-        
-        # Selezione
-        sel = st.multiselect("Seleziona i documenti da generare:", doc_options, default=doc_options)
-        
-        # --- PREZZO DINAMICO ---
-        pricing_row = database.get_pricing(supabase)
-        chat_history_txt = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
-        
-        costo_stimato = ai_engine.stima_costo_token(
-            context_text=chat_history_txt, 
-            num_docs=len(sel), 
-            pricing_row=pricing_row
+        # C. Generazione (AI Engine)
+        # Nota: file_parts viene passato vuoto qui, l'AI si basa sulla chat history che contiene tutto
+        res_docs = ai_engine.genera_docs_json_batch(
+            tasks, hist_txt, [], st.session_state.dati_calc, "models/gemini-1.5-flash"
         )
         
-        # Visualizza Prezzo
-        col_price, col_btn = st.columns([1, 2])
-        with col_price:
-            st.metric(label="Costo Stimato (AI Token + Base)", value=f"€ {costo_stimato:.2f}")
-            if pricing_row:
-                st.caption(f"Tariffa: {pricing_row.get('descrizione', 'Standard')}")
-            else:
-                st.caption("Tariffa: Offline/Fallback")
+        prog.progress(70, "Salvataggio Storico...")
+        
+        # D. Creazione Documento Trascrizione Chat (Feature Richiesta)
+        chat_doc_title = f"Trascrizione_Chat_{datetime.now().strftime('%d%m_%H%M')}"
+        chat_content_formatted = f"# TRASCRIZIONE SESSIONE DI LAVORO\nDATA: {datetime.now()}\n\n{hist_txt}"
+        res_docs[chat_doc_title] = {"titolo": chat_doc_title, "contenuto": chat_content_formatted}
+        
+        # E. Archiviazione nel DB (Append)
+        if supabase:
+            database.archivia_generazione(supabase, f_curr['id'], res_docs)
+            # Aggiorniamo anche lo stato locale del fascicolo per vederli subito nel Tab 2
+            # (Ricarichiamo i dati freschi dal DB è più sicuro)
+            refreshed = supabase.table("fascicoli").select("*").eq("id", f_curr['id']).execute()
+            if refreshed.data:
+                st.session_state.current_fascicolo = refreshed.data[0]
+            
+        prog.progress(90, "Creazione ZIP...")
+        st.session_state.generated_docs_zip = doc_renderer.create_zip(res_docs, st.session_state.sanitizer)
+        
+        # F. Reset Sessione Chat
+        st.session_state.messages = [] 
+        st.session_state.contesto_chat = ""
+        st.session_state.workflow_step = "DONE"
+        
+        prog.progress(100, "Fatto!")
+        st.rerun()
 
-        with col_btn:
-            st.write("") # Spacer
-            if st.button("🚀 PAGA E GENERA", type="primary", use_container_width=True):
-                prog = st.progress(0, "Generazione..."); 
-                tasks = [(d, config.DOCS_METADATA.get(d, "")) for d in sel]
-                hist = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
-                
-                # Nota: file_parts qui potrebbe essere vuoto se non ricaricato, ma l'AI ha la history
-                # Passiamo file_parts_global o lista vuota
-                res = ai_engine.genera_docs_json_batch(
-                    tasks, hist, [], st.session_state.dati_calc, "models/gemini-1.5-flash"
-                )
-                
-                prog.progress(90, "Zip...")
-                st.session_state.generated_docs_zip = doc_renderer.create_zip(res, st.session_state.sanitizer)
-                
-                if supabase:
-                    database.aggiorna_fascicolo(supabase, f_curr['id'], {"documenti_generati": json.dumps(res)})
-                prog.progress(100, "Fatto!")
-
-        # Download ZIP
+    # --- ESITO FINALE ---
+    if st.session_state.workflow_step == "DONE":
+        st.success("✅ Sessione conclusa con successo!")
+        st.info("La chat è stata archiviata ed è scaricabile nel Tab 2 insieme ai documenti.")
+        
         if st.session_state.generated_docs_zip:
             st.download_button(
-                "📦 SCARICA ZIP", 
+                "📦 SCARICA ZIP ORA", 
                 st.session_state.generated_docs_zip.getvalue(), 
-                f"Fascicolo_{f_curr['nome_riferimento']}.zip", 
+                f"Fascicolo_{f_curr['nome_riferimento']}_Sessione.zip", 
                 "application/zip", 
                 type="primary"
             )
+            
+        if st.button("🔄 Avvia Nuova Sessione di Chat"):
+            st.session_state.workflow_step = "CHAT"
+            st.rerun()
