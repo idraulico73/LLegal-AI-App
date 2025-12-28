@@ -61,3 +61,56 @@ def aggiorna_fascicolo(supabase, fascicolo_id, update_data):
 def elimina_fascicolo(supabase, fascicolo_id):
     if not supabase: return
     supabase.table("fascicoli").delete().eq("id", fascicolo_id).execute()
+# --- AGGIUNGERE IN FONDO A modules/database.py ---
+
+def get_listino_completo(supabase):
+    """
+    Recupera TUTTO il listino prezzi come dizionario per calcoli complessi.
+    Return: { 'Sintesi': {row_data}, 'Diffida': {row_data}, ... }
+    """
+    if not supabase: return {}
+    try:
+        res = supabase.table("listino_prezzi").select("*").execute()
+        pricing_dict = {}
+        for row in res.data:
+            pricing_dict[row['tipo_documento']] = row
+        return pricing_dict
+    except Exception as e:
+        print(f"Err listino: {e}")
+        return {}
+
+def archivia_generazione(supabase, fascicolo_id, nuovi_docs_dict):
+    """
+    Legge lo storico esistente e aggiunge (append) i nuovi documenti.
+    Gestisce sia il caso di storico vuoto che esistente.
+    """
+    if not supabase: return
+    
+    try:
+        # 1. Recupera storico attuale
+        res = supabase.table("fascicoli").select("documenti_generati").eq("id", fascicolo_id).execute()
+        if not res.data: return
+        
+        storico_attuale = res.data[0].get("documenti_generati", [])
+        
+        # Se il campo è null o non è una lista, inizializzalo
+        if not isinstance(storico_attuale, list):
+            storico_attuale = []
+            
+        # 2. Aggiungi timestamp ai nuovi docs e converti in lista per il JSONB
+        timestamp_str = str(datetime.now().strftime("%Y-%m-%d %H:%M"))
+        
+        for titolo, doc_data in nuovi_docs_dict.items():
+            entry = {
+                "titolo": titolo,
+                "contenuto": doc_data.get("contenuto", ""),
+                "data_creazione": timestamp_str,
+                "tipo": "auto_generato" if "Chat" not in titolo else "trascrizione_chat"
+            }
+            storico_attuale.append(entry)
+            
+        # 3. Aggiorna DB
+        supabase.table("fascicoli").update({"documenti_generati": storico_attuale}).eq("id", fascicolo_id).execute()
+        
+    except Exception as e:
+        print(f"Errore archiviazione: {e}")
