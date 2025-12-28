@@ -17,51 +17,6 @@ from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from fpdf import FPDF
 
-# --- CODICE DEBUG EMAIL (DA RIMUOVERE DOPO) ---
-import smtplib
-from email.mime.text import MIMEText
-
-st.markdown("### 🛠️ DEBUG EMAIL")
-if st.button("TEST INVIO MAIL ORA"):
-    email_user = st.secrets["smtp"]["email"]
-    email_pwd = st.secrets["smtp"]["password"]
-    st.write(f"Tento connessione con: {email_user}...")
-    
-    try:
-        # 1. Connessione
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.ehlo()
-        server.starttls()
-        server.ehlo()
-        st.write("✅ Connessione Server OK")
-        
-        # 2. Login
-        server.login(email_user, email_pwd)
-        st.write("✅ Login OK")
-        
-        # 3. Invio
-        msg = MIMEText("Se leggi questo, l'email funziona.")
-        msg['Subject'] = "TEST DIAGNOSTICO LEXVANTAGE"
-        msg['From'] = email_user
-        msg['To'] = email_user # Manda a te stesso
-        
-        server.sendmail(email_user, email_user, msg.as_string())
-        server.quit()
-        st.success("✅ MAIL INVIATA CORRETTAMENTE! Controlla la posta.")
-        
-    except Exception as e:
-        st.error(f"❌ ERRORE CRITICO: {e}")
-# ----------------------------------------------
-
-# --- DEBUG SECRETS (DA RIMUOVERE DOPO) ---
-import streamlit as st
-st.write("DEBUG - CHIAVI LETTE:", st.secrets.keys())
-if "stripe" in st.secrets: st.write("Stripe found")
-if "smtp" in st.secrets: st.write("SMTP found")
-if "GOOGLE_API_KEY" in st.secrets: st.write("GOOGLE KEY FOUND ✅")
-else: st.write("❌ GOOGLE KEY MISSING - Controlla secrets.toml")
-# ------------------------------------------
-
 # --- GESTIONE IMPORT CONDIZIONALE SUPABASE ---
 try:
     from supabase import create_client, Client
@@ -157,11 +112,50 @@ if "generated_docs" not in st.session_state: st.session_state.generated_docs = {
 if "workflow_step" not in st.session_state: st.session_state.workflow_step = "CHAT"
 if "token_cost" not in st.session_state: st.session_state.token_cost = 150.00 
 
-# Configurazione API Esterne
+# --- SOSTITUISCI TUTTO IL BLOCCO "Configurazione API Esterne" CON QUESTO ---
+
+# Configurazione Variabili Globali (Default: False)
 HAS_KEY = False
 active_model = None
 PAYMENT_ENABLED = False
 EMAIL_ENABLED = False
+
+# 1. CONFIGURAZIONE GOOGLE AI (Indipendente)
+try:
+    if "GOOGLE_API_KEY" in st.secrets:
+        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+        HAS_KEY = True
+        
+        # Auto-Discovery Modello
+        try:
+            lista_modelli = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            if "models/gemini-1.5-pro" in lista_modelli: active_model = "models/gemini-1.5-pro"
+            elif "models/gemini-1.5-pro-latest" in lista_modelli: active_model = "models/gemini-1.5-pro-latest"
+            elif "models/gemini-1.5-flash" in lista_modelli: active_model = "models/gemini-1.5-flash"
+            else: active_model = lista_modelli[0]
+        except:
+            active_model = "models/gemini-1.5-flash" # Fallback sicuro
+except Exception as e:
+    print(f"Errore AI: {e}")
+
+# 2. CONFIGURAZIONE STRIPE (Indipendente)
+try:
+    if "stripe" in st.secrets:
+        stripe.api_key = st.secrets["stripe"]["secret_key"]
+        STRIPE_PUB_KEY = st.secrets["stripe"]["publishable_key"]
+        PAYMENT_ENABLED = True
+except Exception as e:
+    print(f"Errore Stripe: {e}")
+
+# 3. CONFIGURAZIONE EMAIL (Indipendente)
+try:
+    if "smtp" in st.secrets:
+        # Verifica veloce che le chiavi esistano
+        test_email = st.secrets["smtp"]["email"]
+        test_pwd = st.secrets["smtp"]["password"]
+        EMAIL_ENABLED = True
+except Exception as e:
+    print(f"Errore SMTP: {e}")
 
 # AUTO-DISCOVERY MODELLO (Logica Rev 48 Ripristinata)
 try:
@@ -899,6 +893,7 @@ else:
                     mime="application/zip",
                     type="primary"
                 )
+
 
 
 
