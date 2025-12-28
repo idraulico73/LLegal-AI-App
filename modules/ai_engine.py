@@ -14,19 +14,36 @@ def init_ai():
 
 def get_best_model():
     """
-    Trova il modello migliore disponibile.
-    Cerca gemini-1.5-flash (standard attuale), fallback su pro.
+    Trova il modello migliore che supporti la generazione di testo (generateContent).
+    Evita i modelli di embedding (es. gecko) che causano errore 404/Not Supported.
     """
+    preferred_models = [
+        'models/gemini-1.5-flash',
+        'models/gemini-1.5-pro', 
+        'models/gemini-pro'
+    ]
+    
     try:
-        # Lista modelli supportati
-        candidates = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']
-        available = [m.name for m in genai.list_models()]
+        # Recupera tutti i modelli disponibili associati alla tua API Key
+        all_models = list(genai.list_models())
         
-        for c in candidates:
-            if c in available: return c
-            
-        return candidates[0] # Ritorna il primo come default cieco
-    except:
+        # 1. Cerca tra i preferiti, MA verifica che esistano davvero nella lista recuperata
+        for pref in preferred_models:
+            for m in all_models:
+                if m.name == pref:
+                    return pref
+
+        # 2. Se i preferiti non ci sono (strano), cerca QUALSIASI modello generativo
+        for m in all_models:
+            if 'generateContent' in m.supported_generation_methods:
+                if 'gemini' in m.name: # Filtro aggiuntivo per sicurezza
+                    return m.name
+        
+        # 3. Fallback estremo (se list_models fallisce o è vuoto, proviamo "alla cieca" il flash)
+        return 'models/gemini-1.5-flash'
+        
+    except Exception as e:
+        # Se c'è un errore di rete o API, restituisci il default sperando funzioni
         return 'models/gemini-1.5-flash'
 
 # --- 2. PRIVACY SHIELD ---
