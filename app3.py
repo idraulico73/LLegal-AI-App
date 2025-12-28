@@ -177,48 +177,48 @@ with t3:
             st.rerun()
             
     elif st.session_state.workflow_step == "UNLOCKED":
-# In app3.py, dentro: elif st.session_state.workflow_step == "UNLOCKED":
+    # In app3.py, dentro: elif st.session_state.workflow_step == "UNLOCKED":
 
-    st.success("Analisi Completata. Generazione Documenti Abilitata.")
+        st.success("Analisi Completata. Generazione Documenti Abilitata.")
     
-    # --- LOGICA RECUPERO DATI ---
-    # Recupera info dal DB o Fallback
-    materia = f_curr.get('tipo_causa', 'immobiliare')
+        # --- LOGICA RECUPERO DATI ---
+        # Recupera info dal DB o Fallback
+        materia = f_curr.get('tipo_causa', 'immobiliare')
     
-    # Se il DB è connesso, prendiamo i documenti veri, altrimenti fallback
-    doc_list_info = config.CASE_TYPES_FALLBACK.get(materia, config.CASE_TYPES_FALLBACK['immobiliare'])
-    doc_options = doc_list_info['docs']
+        # Se il DB è connesso, prendiamo i documenti veri, altrimenti fallback
+        doc_list_info = config.CASE_TYPES_FALLBACK.get(materia, config.CASE_TYPES_FALLBACK['immobiliare'])
+        doc_options = doc_list_info['docs']
     
-    # Selezione Documenti
-    sel = st.multiselect("Seleziona i documenti da generare:", doc_options, default=doc_options)
+        # Selezione Documenti
+        sel = st.multiselect("Seleziona i documenti da generare:", doc_options, default=doc_options)
     
-    # --- NUOVA LOGICA PREZZO DINAMICO ---
-    pricing_row = database.get_pricing(supabase) # Recupera riga listino dal DB
+        # --- NUOVA LOGICA PREZZO DINAMICO ---
+        pricing_row = database.get_pricing(supabase) # Recupera riga listino dal DB
     
-    # Calcoliamo il contesto totale (Chat + File caricati)
-    # Nota: st.session_state.contesto_chat potrebbe non essere tutto, uniamo la history
-    chat_history_txt = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
+        # Calcoliamo il contesto totale (Chat + File caricati)
+        # Nota: st.session_state.contesto_chat potrebbe non essere tutto, uniamo la history
+        chat_history_txt = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
     
-    # Stima costo
-    costo_stimato = ai_engine.stima_costo_token(
-        context_text=chat_history_txt, 
-        num_docs=len(sel), 
-        pricing_row=pricing_row
-    )
+        # Stima costo
+        costo_stimato = ai_engine.stima_costo_token(
+             context_text=chat_history_txt, 
+            num_docs=len(sel), 
+            pricing_row=pricing_row
+        )
     
-    # Visualizza Prezzo
-    col_price, col_btn = st.columns([1, 2])
-    with col_price:
-        st.metric(label="Costo Stimato (AI Token + Base)", value=f"€ {costo_stimato:.2f}")
-        if pricing_row:
-            st.caption(f"Tariffa: {pricing_row.get('descrizione', 'Standard')}")
-        else:
-            st.caption("Tariffa: Offline/Fallback")
+        # Visualizza Prezzo
+        col_price, col_btn = st.columns([1, 2])
+        with col_price:
+            st.metric(label="Costo Stimato (AI Token + Base)", value=f"€ {costo_stimato:.2f}")
+            if pricing_row:
+                st.caption(f"Tariffa: {pricing_row.get('descrizione', 'Standard')}")
+            else:
+                st.caption("Tariffa: Offline/Fallback")
 
-    with col_btn:
-        st.write("") # Spacer
-        if st.button("🚀 PAGA E GENERA", type="primary", use_container_width=True):
-             # ... codice esistente per la generazione ...
+        with col_btn:
+            st.write("") # Spacer
+            if st.button("🚀 PAGA E GENERA", type="primary", use_container_width=True):
+                 # ... codice esistente per la generazione ...
              # Importante: Passare 'sel' (selezione documenti) a genera_docs_json_batch
         
         if st.button("🚀 GENERA", type="primary"):
