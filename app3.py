@@ -199,6 +199,3 @@ with t3:
             st.download_button("📦 SCARICA ZIP", st.session_state.generated_docs_zip.getvalue(), f"Fascicolo_{f_curr['nome_riferimento']}.zip", "application/zip", type="primary")
     else:
         st.info("Completa l'analisi nel Tab 2.")
-    else:
-        # ECCO IL BLOCCO CHE MANCAVA! (Ripristinato)
-        st.info("Completa l'analisi nel Tab 2 per sbloccare questa sezione.")
