@@ -218,23 +218,20 @@ with t3:
         with col_btn:
             st.write("") # Spacer
             if st.button("🚀 PAGA E GENERA", type="primary", use_container_width=True):
-                 # ... codice esistente per la generazione ...
-             # Importante: Passare 'sel' (selezione documenti) a genera_docs_json_batch
-        
-        if st.button("🚀 GENERA", type="primary"):
-            prog = st.progress(0, "Generazione..."); 
-            tasks = [(d, config.DOCS_METADATA.get(d, "")) for d in sel]
-            hist = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
+
+                prog = st.progress(0, "Generazione..."); 
+                tasks = [(d, config.DOCS_METADATA.get(d, "")) for d in sel]
+                hist = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
             
-            res = ai_engine.genera_docs_json_batch(tasks, hist, file_parts, st.session_state.dati_calc, "models/gemini-1.5-flash")
-            prog.progress(90, "Zip...")
-            st.session_state.generated_docs_zip = doc_renderer.create_zip(res, st.session_state.sanitizer)
+                res = ai_engine.genera_docs_json_batch(tasks, hist, file_parts, st.session_state.dati_calc, "models/gemini-1.5-flash")
+                prog.progress(90, "Zip...")
+                st.session_state.generated_docs_zip = doc_renderer.create_zip(res, st.session_state.sanitizer)
             
             if supabase:
                 database.aggiorna_fascicolo(supabase, f_curr['id'], {"documenti_generati": json.dumps(res)})
             prog.progress(100, "Fatto!")
 
-        if st.session_state.generated_docs_zip:
-            st.download_button("📦 SCARICA ZIP", st.session_state.generated_docs_zip.getvalue(), f"Fascicolo_{f_curr['nome_riferimento']}.zip", "application/zip", type="primary")
-    else:
-        st.info("Completa l'analisi nel Tab 2.")
+            if st.session_state.generated_docs_zip:
+                st.download_button("📦 SCARICA ZIP", st.session_state.generated_docs_zip.getvalue(), f"Fascicolo_{f_curr['nome_riferimento']}.zip", "application/zip", type="primary")
+        else:
+            st.info("Completa l'analisi nel Tab 2.")
