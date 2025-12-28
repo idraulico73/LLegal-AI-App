@@ -1,7 +1,7 @@
 streamlit
 google-generativeai
+stripe
+supabase
 pypdf
 python-docx
 fpdf
-supabase
-gotrue
