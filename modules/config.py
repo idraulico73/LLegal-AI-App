@@ -10,19 +10,81 @@ PRICING_CONFIG_FALLBACK = {
 }
 
 # Fallback Tipi Causa
+# --- IN modules/config.py ---
+
 CASE_TYPES_FALLBACK = {
     "immobiliare": {
-        "label": "🏗️ Immobiliare & Vizi", 
-        "docs": ["Sintesi", "Matrice_Rischi", "Nota_Difensiva", "Quesiti_CTU", "Bozza_Transazione"]
+        "label": "🏗️ Immobiliare & Condoni", 
+        "docs": [
+            "Sintesi", 
+            "Timeline", 
+            "Analisi_Critica", 
+            "Matrice_Rischi", 
+            "Quesiti_Tecnici", 
+            "Strategia", 
+            "Nota_Difensiva", 
+            "Punti_Attacco", 
+            "Bozza_Accordo"
+        ]
     },
     "medico": {
-        "label": "⚕️ Resp. Medica", 
-        "docs": ["Sintesi", "Analisi_Danno_Biologico", "Relazione_Nesso_Causale", "Nota_Difensiva", "Richiesta_Risarcitoria"]
+        "label": "⚕️ Resp. Medica (Malpractice)", 
+        "docs": [
+            "Sintesi", 
+            "Timeline", 
+            "Analisi_Critica", # Fondamentale per cartelle cliniche
+            "Quesiti_Tecnici", # Fondamentale per CTU medico-legale
+            "Strategia", 
+            "Nota_Difensiva", 
+            "Bozza_Accordo"
+        ]
     },
     "appalti": {
-        "label": "🧱 Appalti & Riserve", 
-        "docs": ["Sintesi", "Analisi_Cronoprogramma", "Registro_Riserve", "Contestazione_Vizi", "Diffida_Adempiere"]
+        "label": "🧱 Appalti & Costruzioni", 
+        "docs": [
+            "Sintesi", 
+            "Timeline", # Fondamentale per ritardi cantiere
+            "Matrice_Rischi", 
+            "Punti_Attacco", # Utile per contestare riserve
+            "Quesiti_Tecnici", 
+            "Nota_Difensiva", 
+            "Bozza_Accordo"
+        ]
+    },
+    "lavoro": {
+        "label": "💼 Diritto del Lavoro", 
+        "docs": [
+            "Sintesi", 
+            "Timeline", # Fondamentale per procedimenti disciplinari
+            "Strategia", 
+            "Punti_Attacco", 
+            "Nota_Difensiva", 
+            "Bozza_Accordo" # Conciliazioni sindacali
+        ]
+    },
+    "famiglia": {
+        "label": "👨‍👩‍👧 Diritto di Famiglia", 
+        "docs": [
+            "Sintesi", 
+            "Timeline", # Utile per storia coniugale
+            "Strategia", 
+            "Nota_Difensiva", 
+            "Bozza_Accordo" # Separazioni consensuali
+        ]
     }
+}
+
+# Aggiorna anche i metadati per i prompt AI corretti
+DOCS_METADATA = {
+    "Sintesi": "Sintesi Esecutiva chiara e strutturata dei fatti.",
+    "Timeline": "Elenco cronologico rigoroso degli eventi con date in grassetto.",
+    "Matrice_Rischi": "Tabella di analisi rischi/opportunità e probabilità.",
+    "Strategia": "Analisi strategica basata su Game Theory e punti di forza.",
+    "Nota_Difensiva": "Bozza di atto difensivo formale e persuasivo.",
+    "Punti_Attacco": "Elenco aggressivo delle debolezze della controparte.",
+    "Bozza_Accordo": "Bozza di accordo transattivo o conciliazione.",
+    "Analisi_Critica": "Analisi critica dei documenti avversari e contraddizioni.",
+    "Quesiti_Tecnici": "Quesiti tecnici precisi per il Consulente (CTU/CTP)."
 }
 
 DOCS_METADATA = {
