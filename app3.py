@@ -133,11 +133,9 @@ with t1:
 
 # TAB 2: CHAT STRATEGICA
 with t2:
-    # --- IN app3.py (Sostituisci tutto il blocco 'with tab2:') ---
-    with tab2:
         st.header("💬 Chat Strategica con il Fascicolo")
 
-        # --- A. STORICO DOCUMENTI (La tua feature) ---
+        # --- A. STORICO DOCUMENTI (Feature Archivio) ---
         storico_docs = f_curr.get('documenti_generati')
         if storico_docs and isinstance(storico_docs, list) and len(storico_docs) > 0:
             with st.expander("🗄️ Archivio Documenti Generati (Sessioni Precedenti)", expanded=False):
@@ -158,7 +156,7 @@ with t2:
                     )
                 st.divider()
 
-        # --- B. CONFIGURAZIONE AI (La mia feature: Modello + Aggressività) ---
+        # --- B. CONFIGURAZIONE AI (Modello + Aggressività) ---
         with st.expander("⚙️ Configurazione Intelligenza (Modello & Tono)", expanded=False):
             c_chat_sett1, c_chat_sett2 = st.columns([1, 1])
             
@@ -185,7 +183,7 @@ with t2:
         if uploaded:
             file_parts, full_txt = doc_renderer.extract_text_from_files(uploaded)
             if full_txt:
-                st.session_state.file_parts = file_parts # Aggiorna stato globale
+                st.session_state.file_parts = file_parts 
                 st.success(f"Caricati {len(uploaded)} nuovi file nel contesto.")
         
         # Gestione Cronologia Visuale
