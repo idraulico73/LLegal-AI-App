@@ -130,48 +130,47 @@ def get_active_gemini_models(supabase):
         # Fallback se la tabella è vuota o errore, per non rompere l'app
         return [{"model_name": "models/gemini-1.5-flash", "display_name": "Gemini 1.5 Flash (Default)"}]
 
+# --- IN modules/database.py ---
+
 def registra_transazione_doc(supabase, fascicolo_id, doc_type, model_name, tokens_in, tokens_out):
     """
-    CALCOLO PREZZO IBRIDO:
-    Totale = PrezzoFisso + (CostoVariabileAI * Moltiplicatore)
+    CALCOLO PREZZO "VALUE BASED":
+    Prezzo = Fisso + [ (CostoIn * TokIn) + (CostoOut * TokOut) ] * MoltiplicatoreModello
     """
     if not supabase: return 0.0, {}
 
     try:
-        # 1. Recupera Costi Modello (dalla tabella gemini_models)
-        # Costo vivo puro dell'intelligenza artificiale
-        mod_res = supabase.table("gemini_models").select("*").eq("model_name", model_name).execute()
-        
-        if not mod_res.data:
-             # Fallback: usiamo prezzi di sicurezza se il modello non è censito
-            cost_in_unit, cost_out_unit = 0.00035, 0.00105 
-        else:
-            m = mod_res.data[0]
-            # Gestisce diverse nomenclature colonne se presenti
-            cost_in_unit = float(m.get('input_price', 0) or m.get('cost_per_1k_input', 0))
-            cost_out_unit = float(m.get('output_price', 0) or m.get('cost_per_1k_output', 0))
+        # 1. Recupera Moltiplicatore Modello (Es. Flash=1.0, Pro=10.0)
+        mod_res = supabase.table("gemini_models").select("price_multiplier").eq("model_name", model_name).execute()
+        model_multiplier = 1.0
+        if mod_res.data:
+            model_multiplier = float(mod_res.data[0].get('price_multiplier', 1.0))
 
-        # 2. Recupera Configurazione Listino (Prezzo Fisso + Moltiplicatore)
+        # 2. Recupera Listino Base del Documento
         list_res = supabase.table("listino_prezzi").select("*").eq("tipo_documento", doc_type).execute()
         
-        # Valori Default
         prezzo_fisso = 0.0
-        coeff = 1.0
+        costo_base_in = 0.0
+        costo_base_out = 0.0
         
         if list_res.data:
             row = list_res.data[0]
             prezzo_fisso = float(row.get('prezzo_fisso', 0.0))
-            coeff = float(row.get('moltiplicatore_complessita', 1.0))
+            # Questi valori sono già calcolati come 0.5% e 5% dal SQL
+            costo_base_in = float(row.get('prezzo_per_1k_input_token', 0.0))
+            costo_base_out = float(row.get('prezzo_per_1k_output_token', 0.0))
 
-        # 3. Calcolo Formula Reale
-        costo_base_in = (tokens_in / 1000) * cost_in_unit
-        costo_base_out = (tokens_out / 1000) * cost_out_unit
-        costo_variabile_totale = costo_base_in + costo_base_out
+        # 3. Calcolo Parte Variabile (Valore Intellettuale)
+        valore_input = (tokens_in / 1000) * costo_base_in
+        valore_output = (tokens_out / 1000) * costo_base_out
         
-        # FORMULA FINALE: Base Fissa + (Costo Variabile * Moltiplicatore Margine)
-        prezzo_finale = prezzo_fisso + (costo_variabile_totale * coeff)
+        # 4. Applicazione Moltiplicatore Modello solo alla parte variabile
+        # (O a tutto, a seconda della tua strategia. Qui applico alla variabile come discusso)
+        variabile_totale = (valore_input + valore_output) * model_multiplier
         
-        # 4. Creazione Snapshot
+        prezzo_finale = prezzo_fisso + variabile_totale
+        
+        # 5. Creazione Snapshot
         import datetime
         doc_snapshot = {
             "titolo": doc_type,
@@ -179,11 +178,12 @@ def registra_transazione_doc(supabase, fascicolo_id, doc_type, model_name, token
             "data_creazione": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
             "metadata_pricing": {
                 "model_used": model_name,
+                "multiplier_used": model_multiplier,
                 "tokens": {"input": tokens_in, "output": tokens_out},
                 "components": {
-                    "fixed_fee": prezzo_fisso,
-                    "variable_cost": costo_variabile_totale,
-                    "multiplier": coeff
+                    "fixed": prezzo_fisso,
+                    "variable_base": valore_input + valore_output,
+                    "variable_final": variabile_totale
                 },
                 "final_price": prezzo_finale
             }
@@ -192,5 +192,7 @@ def registra_transazione_doc(supabase, fascicolo_id, doc_type, model_name, token
         return prezzo_finale, doc_snapshot
 
     except Exception as e:
+        print(f"Errore calcolo prezzo: {e}")
+        return 0.0, {}
         print(f"Errore calcolo prezzo: {e}")
         return 0.0, {}
