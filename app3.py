@@ -133,73 +133,108 @@ with t1:
 
 # TAB 2: CHAT STRATEGICA
 with t2:
-    st.header("Analisi Strategica")
-    # --- INSERIRE IN app3.py DENTRO 'with t2:' ---
-    
-    # VISUALIZZATORE STORICO (Nuova Feature)
-    storico_docs = f_curr.get('documenti_generati')
-    if storico_docs and isinstance(storico_docs, list) and len(storico_docs) > 0:
-        with st.expander("🗄️ Archivio Documenti Generati (Sessioni Precedenti)", expanded=False):
-            st.caption("Documenti e Trascrizioni Chat salvati.")
-            # Mostriamo dal più recente
-            for doc in reversed(storico_docs):
-                col_d1, col_d2 = st.columns([4, 1])
-                icon = "💬" if doc.get('tipo') == 'trascrizione_chat' else "📄"
-                
-                # Titolo e Data
-                lbl = f"{icon} **{doc.get('titolo')}**"
-                if 'data_creazione' in doc: lbl += f" - *{doc['data_creazione']}*"
-                col_d1.markdown(lbl)
-                
-                # Download Button Diretto
-                col_d2.download_button(
-                    label="Scarica",
-                    data=doc.get('contenuto', ''),
-                    file_name=f"{doc.get('titolo')}.txt", # Upgrade futuro: converti in docx al volo se serve
-                    key=f"hist_{doc.get('titolo')}_{doc.get('data_creazione')}"
-                )
-        st.divider()
-    
-    # ... (qui sotto continua il codice esistente 'uploaded = st.file_uploader...') ...
-    uploaded = st.file_uploader("Carica documenti", accept_multiple_files=True)
-    
-    # Estrazione testo
-    file_parts, full_txt = doc_renderer.extract_text_from_files(uploaded)
-    if file_parts:
-        file_parts_global = file_parts # Salviamo per eventuale uso
-    
-    for m in st.session_state.messages:
-        with st.chat_message(m["role"]): st.markdown(m["content"])
+    # --- IN app3.py (Sostituisci tutto il blocco 'with tab2:') ---
+    with tab2:
+        st.header("💬 Chat Strategica con il Fascicolo")
 
-    if prompt := st.chat_input("Scrivi qui..."):
-        st.session_state.messages.append({"role":"user", "content":prompt})
-        st.session_state.contesto_chat += f"\nUTENTE: {prompt}"
-        with st.chat_message("user"): st.write(prompt)
-        
-        with st.spinner("Analisi..."):
-            resp_data = ai_engine.interroga_gemini(
-                "models/gemini-1.5-flash", prompt, st.session_state.contesto_chat,
-                file_parts, st.session_state.dati_calc, st.session_state.sanitizer,
-                f"Prezzo: {prezzo_txt}", f_curr.get('livello_aggressivita', 5)
-            )
-        
-        ai_content = resp_data.get("contenuto", "Errore")
-        ai_phase = resp_data.get("fase", "intervista")
-        
-        st.session_state.messages.append({"role":"assistant", "content": ai_content})
-        st.session_state.contesto_chat += f"\nAI: {ai_content}"
-        
-        with st.chat_message("assistant"):
-            if resp_data.get("titolo"): st.markdown(f"### {resp_data['titolo']}")
-            st.markdown(ai_content)
+        # --- A. STORICO DOCUMENTI (La tua feature) ---
+        storico_docs = f_curr.get('documenti_generati')
+        if storico_docs and isinstance(storico_docs, list) and len(storico_docs) > 0:
+            with st.expander("🗄️ Archivio Documenti Generati (Sessioni Precedenti)", expanded=False):
+                st.caption("Documenti e Trascrizioni Chat salvati.")
+                for doc in reversed(storico_docs):
+                    col_d1, col_d2 = st.columns([4, 1])
+                    icon = "💬" if doc.get('tipo') == 'trascrizione_chat' else "📄"
+                    
+                    lbl = f"{icon} **{doc.get('titolo')}**"
+                    if 'data_creazione' in doc: lbl += f" - *{doc['data_creazione']}*"
+                    col_d1.markdown(lbl)
+                    
+                    col_d2.download_button(
+                        label="Scarica",
+                        data=doc.get('contenuto', ''),
+                        file_name=f"{doc.get('titolo')}.txt",
+                        key=f"hist_{doc.get('titolo')}_{doc.get('data_creazione', 'now')}"
+                    )
+                st.divider()
+
+        # --- B. CONFIGURAZIONE AI (La mia feature: Modello + Aggressività) ---
+        with st.expander("⚙️ Configurazione Intelligenza (Modello & Tono)", expanded=False):
+            c_chat_sett1, c_chat_sett2 = st.columns([1, 1])
             
-            # Se la fase è 'strategia' o se l'utente ha confermato esplicitamente
-            if ai_phase == "strategia":
-                st.success("💡 Strategia Definita.")
-                if st.button("✅ VAI ALLA GENERAZIONE", key="smart_btn_strategy"):
-                    st.session_state.workflow_step = "PAYMENT"
-                    st.rerun()
+            with c_chat_sett1:
+                try:
+                    chat_models_db = database.get_active_gemini_models(supabase)
+                except: chat_models_db = []
+                
+                selected_chat_model = "models/gemini-1.5-flash"
+                if chat_models_db:
+                    map_chat = {m['display_name']: m['model_name'] for m in chat_models_db}
+                    chat_choice = st.selectbox("Seleziona Modello Chat:", list(map_chat.keys()), key="chat_sel_tab2")
+                    selected_chat_model = map_chat[chat_choice]
+            
+            with c_chat_sett2:
+                # Default aggressività dal fascicolo, ma modificabile live
+                def_agg = f_curr.get('livello_aggressivita', 5)
+                aggression_level = st.slider("Livello Aggressività (1-10)", 1, 10, def_agg, key="chat_agg_tab2")
 
+        # --- C. UPLOAD E CHAT ---
+        uploaded = st.file_uploader("Carica nuovi documenti per questa sessione", accept_multiple_files=True, key="chat_uploader")
+        
+        # Estrazione testo (se caricato ora)
+        if uploaded:
+            file_parts, full_txt = doc_renderer.extract_text_from_files(uploaded)
+            if full_txt:
+                st.session_state.file_parts = file_parts # Aggiorna stato globale
+                st.success(f"Caricati {len(uploaded)} nuovi file nel contesto.")
+        
+        # Gestione Cronologia Visuale
+        if "messages" not in st.session_state: st.session_state.messages = []
+        for m in st.session_state.messages:
+            with st.chat_message(m["role"]): st.markdown(m["content"])
+
+        # --- D. LOGICA CHAT ---
+        if prompt := st.chat_input("Fai una domanda strategica..."):
+            # 1. User
+            st.session_state.messages.append({"role":"user", "content":prompt})
+            st.session_state.contesto_chat += f"\nUTENTE: {prompt}"
+            with st.chat_message("user"): st.write(prompt)
+            
+            # 2. AI Generation
+            with st.chat_message("assistant"):
+                with st.spinner("⚖️ Analisi giuridica in corso..."):
+                    
+                    # Recupero dati calcolo se esistono
+                    dati_calc_str = st.session_state.dati_calc if "dati_calc" in st.session_state else "Nessun dato economico."
+                    
+                    resp_data = ai_engine.interroga_gemini(
+                        selected_chat_model,       # <--- USA IL MODELLO SCELTO DALL'UTENTE
+                        prompt, 
+                        st.session_state.contesto_chat,
+                        st.session_state.file_parts, 
+                        dati_calc_str, 
+                        st.session_state.sanitizer,
+                        "Listino Standard",        # Placeholder per pricing info
+                        aggression_level           # <--- USA L'AGGRESSIVITÀ DELLO SLIDER
+                    )
+                
+                ai_content = resp_data.get("contenuto", "Errore generazione.")
+                ai_title = resp_data.get("titolo", "Risposta")
+                
+                # Visualizzazione
+                final_view = f"### {ai_title}\n\n{ai_content}"
+                st.markdown(final_view)
+                
+                # Aggiornamento memoria
+                st.session_state.messages.append({"role":"assistant", "content": final_view})
+                st.session_state.contesto_chat += f"\nAI: {ai_content}"
+                
+                # Bottone Rapido per passare alla generazione (se rilevato intento strategico)
+                if resp_data.get("fase") == "strategia":
+                    st.success("💡 Strategia rilevata. Vuoi generare i documenti?")
+                    if st.button("✅ VAI ALLA GENERAZIONE", key=f"btn_go_gen_{len(st.session_state.messages)}"):
+                        st.session_state.workflow_step = "GENERATING" # O "PAYMENT" se vuoi step intermedio
+                        st.rerun()
 # TAB 3: GENERAZIONE DOCUMENTI
 # --- SOSTITUIRE TUTTO IL BLOCCO 'with t3:' IN app3.py ---
 
