@@ -227,46 +227,69 @@ with t3:
         if custom_name not in sel:
             sel.append(custom_name)
 
-    # 3. CALCOLO PREVENTIVO DINAMICO & GRANULARE
-    # Recuperiamo tutto il listino
-    listino = database.get_listino_completo(supabase)
-    
-    totale_stimato = 0.0
-    dettaglio_costi = []
-    
-    for d_name in sel:
-        # Logica di matching prezzo:
-        # 1. Cerca il nome esatto (es. "Sintesi")
-        # 2. Se è il custom, cerca "Documento_Dinamico"
-        # 3. Altrimenti usa "pacchetto_base" o valori default
-        
-        row = listino.get(d_name)
-        if not row and d_name == custom_name: row = listino.get("Documento_Dinamico")
-        
-        # Valori default se DB vuoto
-        p_fisso = float(row.get('prezzo_fisso', 0)) if row else 50.0
-        p_out_1k = float(row.get('prezzo_per_1k_output_token', 0.05)) if row else 0.05
-        molt = float(row.get('moltiplicatore_complessita', 1.0)) if row else 1.0
-        
-        # Stima: 1 pagina densa ~ 2000 caratteri ~ 500 token output
-        costo_doc = p_fisso + ((2000/1000) * 0.25 * p_out_1k * molt) # 0.25 è ratio char/token approx
-        # Semplificazione: usiamo un fisso + variabile stimata
-        costo_doc = max(p_fisso + 2.0, 10.0) # Floor minimo di 10 euro a doc per sicurezza demo
-        
-        totale_stimato += costo_doc
-        dettaglio_costi.append(f"- {d_name}: € {costo_doc:.2f}")
+# --- IN app3.py (Tab 3) ---
 
-    # Visualizza Preventivo
+    # 3. CONFIGURAZIONE INTELLIGENZA E PREVENTIVO
     st.markdown("---")
-    c_p1, c_p2 = st.columns([1,1])
-    with c_p1:
-        st.write("### 🧾 Preventivo Sessione")
-        for line in dettaglio_costi: st.caption(line)
-        st.markdown(f"#### TOTALE STIMATO: € {totale_stimato:.2f}")
+    c_conf1, c_conf2 = st.columns([1, 1])
     
-    with c_p2:
+    # Variabile per il moltiplicatore visuale
+    current_multiplier = 1.0 
+    
+    with c_conf1:
+        st.write("### 🧠 Intelligenza Artificiale")
+        try:
+            # Recupera modelli completi (incluso moltiplicatore)
+            # Nota: Assumiamo che get_active_gemini_models ora ritorni tutto (*) o modificala per farlo
+            active_models = supabase.table("gemini_models").select("*").eq("is_active", True).execute().data
+        except: 
+            active_models = []
+            
+        if active_models:
+            # Mappa per selectbox
+            map_models = {m['display_name']: m for m in active_models}
+            sel_label = st.selectbox("Seleziona Potenza:", list(map_models.keys()))
+            
+            selected_obj = map_models[sel_label]
+            SELECTED_MODEL_ID = selected_obj['model_name']
+            current_multiplier = float(selected_obj.get('price_multiplier', 1.0))
+            
+            # Feedback visivo immediato
+            if current_multiplier > 1.0:
+                st.info(f"⚡ Modalità Elite: I costi variabili sono moltiplicati x{current_multiplier}")
+        else:
+            st.warning("⚠️ Listino modelli offline. Uso Default.")
+            SELECTED_MODEL_ID = "models/gemini-1.5-flash"
+
+    with c_conf2:
+        st.write("### 🧾 Stima Costi")
+        totale_stimato_min = 0.0
+        totale_stimato_max = 0.0
+        
+        listino = database.get_listino_completo(supabase)
+        
+        for d_name in sel:
+            row = listino.get(d_name) or listino.get("Documento_Dinamico") or {}
+            p_fisso = float(row.get('prezzo_fisso', 0) or 50.0)
+            
+            # Recuperiamo i costi base calcolati nel DB (0.5% e 5%)
+            c_in = float(row.get('prezzo_per_1k_input_token', 0.0))
+            c_out = float(row.get('prezzo_per_1k_output_token', 0.0))
+            
+            # Simulazione: 5k input (medio), 1k output (medio)
+            var_base = (5 * c_in) + (1 * c_out)
+            
+            # Applichiamo moltiplicatore del modello scelto
+            var_final = var_base * current_multiplier
+            
+            costo_probabile = p_fisso + var_final
+            
+            totale_stimato_min += costo_probabile
+            st.caption(f"- {d_name}: ~€ {costo_probabile:.2f}")
+            
+        st.markdown(f"#### Totale Stimato: € {totale_stimato_min:.2f}")
+        
         if st.session_state.workflow_step == "CHAT":
-            st.warning("⚠️ Attenzione: La generazione salverà i documenti e ARCHIVIERÀ la chat attuale.")
             if st.button("💳 CONFERMA E GENERA", type="primary", use_container_width=True):
                 st.session_state.workflow_step = "GENERATING"
                 st.rerun()
