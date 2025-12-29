@@ -229,66 +229,95 @@ with t3:
 
 # --- IN app3.py (Tab 3) ---
 
-    # 3. CONFIGURAZIONE INTELLIGENZA E PREVENTIVO
+# 3. INTELLIGENZA ARTIFICIALE & PREVENTIVO DINAMICO
     st.markdown("---")
+    
+    # --- A. SELEZIONE MODELLO (Nuova Feature) ---
     c_conf1, c_conf2 = st.columns([1, 1])
     
-    # Variabile per il moltiplicatore visuale
+    # Variabili per il calcolo
     current_multiplier = 1.0 
+    SELECTED_MODEL_ID = "models/gemini-1.5-flash" # Default
     
     with c_conf1:
-        st.write("### 🧠 Intelligenza Artificiale")
+        st.write("### 🧠 Motore AI")
         try:
-            # Recupera modelli completi (incluso moltiplicatore)
-            # Nota: Assumiamo che get_active_gemini_models ora ritorni tutto (*) o modificala per farlo
+            # Recupera modelli e moltiplicatori dalla tabella gemini_models
             active_models = supabase.table("gemini_models").select("*").eq("is_active", True).execute().data
         except: 
             active_models = []
             
         if active_models:
-            # Mappa per selectbox
+            # Mappa per selectbox: "Nome Visualizzato" -> Oggetto Modello
             map_models = {m['display_name']: m for m in active_models}
-            sel_label = st.selectbox("Seleziona Potenza:", list(map_models.keys()))
+            
+            # Pre-selezione intelligente (Flash di solito è il primo o default)
+            sel_label = st.selectbox(
+                "Seleziona Potenza:", 
+                list(map_models.keys()),
+                help="Scegli 'Pro' per ragionamenti complessi (costo variabile x10)."
+            )
             
             selected_obj = map_models[sel_label]
             SELECTED_MODEL_ID = selected_obj['model_name']
             current_multiplier = float(selected_obj.get('price_multiplier', 1.0))
             
-            # Feedback visivo immediato
+            # Feedback visivo immediato sul moltiplicatore
             if current_multiplier > 1.0:
-                st.info(f"⚡ Modalità Elite: I costi variabili sono moltiplicati x{current_multiplier}")
+                st.info(f"⚡ **Modalità Elite Attiva**: I costi variabili sono calcolati x{current_multiplier}")
+            else:
+                st.caption("Modalità Standard (x1.0)")
         else:
-            st.warning("⚠️ Listino modelli offline. Uso Default.")
-            SELECTED_MODEL_ID = "models/gemini-1.5-flash"
+            st.warning("⚠️ Listino modelli offline. Uso Default (Flash).")
 
+    # --- B. CALCOLO STIMA (Logica Aggiornata) ---
     with c_conf2:
-        st.write("### 🧾 Stima Costi")
-        totale_stimato_min = 0.0
-        totale_stimato_max = 0.0
+        st.write("### 🧾 Preventivo Sessione")
         
+        totale_stimato_min = 0.0
+        dettaglio_costi = []
+        
+        # Recuperiamo il listino completo (Cached se possibile, qui diretto)
         listino = database.get_listino_completo(supabase)
         
         for d_name in sel:
-            row = listino.get(d_name) or listino.get("Documento_Dinamico") or {}
-            p_fisso = float(row.get('prezzo_fisso', 0) or 50.0)
+            # 1. Recupero Configurazione Documento (Logica originale preservata) [cite: 21, 22]
+            row = listino.get(d_name)
+            # Gestione fallback per il documento custom (es. "Diffida Ad Hoc")
+            if not row and d_name == custom_name: 
+                row = listino.get("Documento_Dinamico")
             
-            # Recuperiamo i costi base calcolati nel DB (0.5% e 5%)
-            c_in = float(row.get('prezzo_per_1k_input_token', 0.0))
-            c_out = float(row.get('prezzo_per_1k_output_token', 0.0))
+            # Valori Default se DB vuoto
+            row = row or {} 
+            p_fisso = float(row.get('prezzo_fisso', 50.0))
             
-            # Simulazione: 5k input (medio), 1k output (medio)
-            var_base = (5 * c_in) + (1 * c_out)
+            # Recuperiamo i costi base variabili (già calcolati nel DB come 0.5% e 5%)
+            c_in = float(row.get('prezzo_per_1k_input_token', 0.02))
+            c_out = float(row.get('prezzo_per_1k_output_token', 0.05))
             
-            # Applichiamo moltiplicatore del modello scelto
+            # 2. Simulazione Quantità Token (Stima prudenziale per preventivo)
+            # Input: ~5k token (un fascicolo medio)
+            # Output: ~1k token (2 pagine dense)
+            stima_in = 5.0  # k tokens
+            stima_out = 1.0 # k tokens
+            
+            # Se è un documento di pura analisi (es. Timeline), pesa più l'input
+            if "Timeline" in d_name or "Analisi" in d_name: stima_in = 15.0
+            
+            # 3. Formula "Value Based": Variabile * Moltiplicatore Modello
+            var_base = (stima_in * c_in) + (stima_out * c_out)
             var_final = var_base * current_multiplier
             
             costo_probabile = p_fisso + var_final
             
             totale_stimato_min += costo_probabile
-            st.caption(f"- {d_name}: ~€ {costo_probabile:.2f}")
-            
-        st.markdown(f"#### Totale Stimato: € {totale_stimato_min:.2f}")
+            dettaglio_costi.append(f"- {d_name}: ~€ {costo_probabile:.2f}")
+
+        # Visualizzazione preventivo
+        for line in dettaglio_costi: st.caption(line)
+        st.markdown(f"#### TOTALE STIMATO: € {totale_stimato_min:.2f}")
         
+        # Bottone Conferma (Logica originale preservata) 
         if st.session_state.workflow_step == "CHAT":
             if st.button("💳 CONFERMA E GENERA", type="primary", use_container_width=True):
                 st.session_state.workflow_step = "GENERATING"
