@@ -156,25 +156,38 @@ with t2:
                     )
                 st.divider()
 
-        # --- B. CONFIGURAZIONE AI (Modello + Aggressività) ---
-        with st.expander("⚙️ Configurazione Intelligenza (Modello & Tono)", expanded=False):
-            c_chat_sett1, c_chat_sett2 = st.columns([1, 1])
+# --- B. CONFIGURAZIONE AI (Solo Scelta Modello - Aggressività presa dalla Sidebar) ---
+        with st.expander("⚙️ Configurazione Intelligenza (Modello Chat)", expanded=True):
+            # Recupero modelli dal DB con FALLBACK garantito
+            try:
+                chat_models_db = database.get_active_gemini_models(supabase)
+            except: 
+                chat_models_db = []
             
-            with c_chat_sett1:
-                try:
-                    chat_models_db = database.get_active_gemini_models(supabase)
-                except: chat_models_db = []
-                
-                selected_chat_model = "models/gemini-1.5-flash"
-                if chat_models_db:
-                    map_chat = {m['display_name']: m['model_name'] for m in chat_models_db}
-                    chat_choice = st.selectbox("Seleziona Modello Chat:", list(map_chat.keys()), key="chat_sel_tab2")
-                    selected_chat_model = map_chat[chat_choice]
+            # Se il DB è vuoto o non risponde, usiamo questi di default per garantire che la dropbox appaia
+            if not chat_models_db:
+                map_chat = {
+                    "Gemini 1.5 Flash (Veloce & Economico)": "models/gemini-1.5-flash",
+                    "Gemini 1.5 Pro (Avanzato & Costoso)": "models/gemini-1.5-pro"
+                }
+                # st.caption("⚠️ Modalità Offline: uso modelli di default.")
+            else:
+                map_chat = {m['display_name']: m['model_name'] for m in chat_models_db}
             
-            with c_chat_sett2:
-                # Default aggressività dal fascicolo, ma modificabile live
-                def_agg = f_curr.get('livello_aggressivita', 5)
-                aggression_level = st.slider("Livello Aggressività (1-10)", 1, 10, def_agg, key="chat_agg_tab2")
+            # ORA LA SELECTBOX È FUORI DAGLI IF, QUINDI APPARE SEMPRE
+            chat_choice = st.selectbox(
+                "Seleziona il 'Cervello' per questa chat:", 
+                list(map_chat.keys()), 
+                key="chat_sel_tab2",
+                help="Scegli Flash per risposte rapide, Pro per ragionamenti complessi."
+            )
+            selected_chat_model = map_chat[chat_choice]
+            
+            # Aggressività: Visualizziamo solo quella attuale (Read-only) per conferma
+            agg_val = f_curr.get('livello_aggressivita', 5)
+            st.caption(f"ℹ️ Livello Aggressività attivo: **{agg_val}/10** (Modificabile dalla Sidebar/Impostazioni)")
+            # Passiamo questo valore alla variabile che usa la chat
+            aggression_level = agg_val
 
         # --- C. UPLOAD E CHAT ---
         uploaded = st.file_uploader("Carica nuovi documenti per questa sessione", accept_multiple_files=True, key="chat_uploader")
